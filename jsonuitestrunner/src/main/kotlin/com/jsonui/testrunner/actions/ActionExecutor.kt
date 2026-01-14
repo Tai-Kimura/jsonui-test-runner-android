@@ -35,6 +35,7 @@ class ActionExecutor(
             "back" -> executeBack()
             "screenshot" -> executeScreenshot(step)
             "alertTap" -> executeAlertTap(step, timeout)
+            "selectOption" -> executeSelectOption(step, timeout)
             else -> throw IllegalArgumentException("Unknown action: $action")
         }
     }
@@ -239,6 +240,50 @@ class ActionExecutor(
         }
 
         throw AssertionError("Alert button '$buttonText' not found within ${timeout}ms")
+    }
+
+    private fun executeSelectOption(step: TestStep, timeout: Long) {
+        val id = step.id ?: throw IllegalArgumentException("selectOption requires 'id'")
+
+        // Step 1: Tap the SelectBox to open the bottom sheet
+        val selectBox = waitForElement(id, timeout)
+        selectBox.click()
+        Thread.sleep(300) // Wait for bottom sheet animation
+
+        // Step 2: Wait for the option list to appear
+        waitForElement("kjui_x7q_optionList", timeout)
+
+        // Step 3: Select the option by index, label, or value
+        when {
+            step.index != null -> {
+                // Select by index (preferred for cross-platform consistency)
+                val optionElement = waitForElement("kjui_x7q_option_${step.index}", timeout)
+                optionElement.click()
+            }
+            step.label != null || step.value != null -> {
+                // Fallback: select by text (label or value)
+                val text = step.label ?: step.value
+                val startTime = System.currentTimeMillis()
+                var found = false
+
+                while (System.currentTimeMillis() - startTime < timeout && !found) {
+                    val option = device.findObject(By.text(text))
+                    if (option != null) {
+                        option.click()
+                        found = true
+                    } else {
+                        Thread.sleep(100)
+                    }
+                }
+
+                if (!found) {
+                    throw AssertionError("Option '$text' not found within ${timeout}ms")
+                }
+            }
+            else -> throw IllegalArgumentException("selectOption requires 'index', 'label', or 'value'")
+        }
+
+        // Note: KotlinJsonUI SelectBox auto-closes on selection, no need to tap Done button
     }
 
     // Helper functions

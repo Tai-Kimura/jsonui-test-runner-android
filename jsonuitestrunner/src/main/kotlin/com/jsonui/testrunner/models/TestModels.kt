@@ -93,7 +93,9 @@ data class FlowTestStep(
     val contains: String? = null,
     val path: String? = null,
     val amount: Int? = null,
-    val button: String? = null
+    val button: String? = null,
+    val label: String? = null,
+    val index: Int? = null
 )
 
 @Serializable
@@ -122,7 +124,9 @@ data class TestStep(
     val contains: String? = null,
     val path: String? = null,
     val amount: Int? = null,
-    val button: String? = null
+    val button: String? = null,
+    val label: String? = null,
+    val index: Int? = null
 ) {
     val isAction: Boolean get() = action != null
     val isAssertion: Boolean get() = assert != null
