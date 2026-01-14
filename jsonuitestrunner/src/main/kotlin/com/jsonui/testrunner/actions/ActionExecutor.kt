@@ -34,6 +34,7 @@ class ActionExecutor(
             "wait" -> executeWait(step)
             "back" -> executeBack()
             "screenshot" -> executeScreenshot(step)
+            "alertTap" -> executeAlertTap(step, timeout)
             else -> throw IllegalArgumentException("Unknown action: $action")
         }
     }
@@ -200,6 +201,44 @@ class ActionExecutor(
         val name = step.name ?: "screenshot_${System.currentTimeMillis()}"
         // Screenshot will be handled by the test runner
         // This is a placeholder - actual implementation depends on test framework setup
+    }
+
+    private fun executeAlertTap(step: TestStep, timeout: Long) {
+        val buttonText = step.button ?: throw IllegalArgumentException("alertTap requires 'button'")
+
+        val startTime = System.currentTimeMillis()
+
+        while (System.currentTimeMillis() - startTime < timeout) {
+            // Try to find button by text in any dialog
+            val button = device.findObject(By.text(buttonText))
+            if (button != null) {
+                button.click()
+                return
+            }
+
+            // Try standard Android dialog button IDs
+            val positiveButton = device.findObject(By.res("android:id/button1"))
+            if (positiveButton != null && positiveButton.text == buttonText) {
+                positiveButton.click()
+                return
+            }
+
+            val negativeButton = device.findObject(By.res("android:id/button2"))
+            if (negativeButton != null && negativeButton.text == buttonText) {
+                negativeButton.click()
+                return
+            }
+
+            val neutralButton = device.findObject(By.res("android:id/button3"))
+            if (neutralButton != null && neutralButton.text == buttonText) {
+                neutralButton.click()
+                return
+            }
+
+            Thread.sleep(100)
+        }
+
+        throw AssertionError("Alert button '$buttonText' not found within ${timeout}ms")
     }
 
     // Helper functions

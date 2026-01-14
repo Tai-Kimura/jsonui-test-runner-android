@@ -92,7 +92,8 @@ data class FlowTestStep(
     val equals: JsonElement? = null,
     val contains: String? = null,
     val path: String? = null,
-    val amount: Int? = null
+    val amount: Int? = null,
+    val button: String? = null
 )
 
 @Serializable
@@ -120,7 +121,8 @@ data class TestStep(
     val equals: JsonElement? = null,
     val contains: String? = null,
     val path: String? = null,
-    val amount: Int? = null
+    val amount: Int? = null,
+    val button: String? = null
 ) {
     val isAction: Boolean get() = action != null
     val isAssertion: Boolean get() = assert != null
