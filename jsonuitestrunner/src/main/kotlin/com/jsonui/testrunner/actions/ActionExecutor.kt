@@ -41,7 +41,14 @@ class ActionExecutor(
     private fun executeTap(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("tap requires 'id'")
         val element = waitForElement(id, timeout)
-        element.click()
+
+        // If text is specified, tap on the specific text portion within the element
+        val targetText = step.text
+        if (targetText != null) {
+            tapTextPortion(element, targetText)
+        } else {
+            element.click()
+        }
     }
 
     private fun executeDoubleTap(step: TestStep, timeout: Long) {
@@ -235,4 +242,38 @@ class ActionExecutor(
         val endX: Int,
         val endY: Int
     )
+
+    /**
+     * Tap on a specific text portion within an element
+     * Calculates the approximate position of the target text and taps there
+     */
+    private fun tapTextPortion(element: UiObject2, targetText: String) {
+        val fullText = element.text ?: throw IllegalArgumentException("Element has no text")
+        val startIndex = fullText.indexOf(targetText)
+
+        if (startIndex == -1) {
+            throw IllegalArgumentException("Text '$targetText' not found in element text '$fullText'")
+        }
+
+        val endIndex = startIndex + targetText.length
+        val totalLength = fullText.length
+
+        if (totalLength == 0) {
+            element.click()
+            return
+        }
+
+        // Calculate the center position of the target text (as a ratio of the element width)
+        val startRatio = startIndex.toFloat() / totalLength.toFloat()
+        val endRatio = endIndex.toFloat() / totalLength.toFloat()
+        val centerRatio = (startRatio + endRatio) / 2f
+
+        // Calculate the tap coordinate
+        val bounds = element.visibleBounds
+        val tapX = bounds.left + (bounds.width() * centerRatio).toInt()
+        val tapY = bounds.centerY()
+
+        // Tap at the calculated position
+        device.click(tapX, tapY)
+    }
 }
