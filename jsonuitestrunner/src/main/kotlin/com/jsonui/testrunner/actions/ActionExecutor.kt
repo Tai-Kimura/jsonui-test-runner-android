@@ -245,15 +245,28 @@ class ActionExecutor(
     private fun executeSelectOption(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("selectOption requires 'id'")
 
-        // Step 1: Tap the SelectBox to open the bottom sheet
+        // Step 1: Tap the SelectBox/DateSelectBox to open the bottom sheet
         val selectBox = waitForElement(id, timeout)
         selectBox.click()
         Thread.sleep(300) // Wait for bottom sheet animation
 
-        // Step 2: Wait for the option list to appear
-        waitForElement("kjui_x7q_optionList", timeout)
+        // Step 2: Check if it's a DateSelectBox (wheel picker) or regular SelectBox
+        val optionList = device.findObject(By.res("kjui_x7q_optionList"))
+        val doneButton = device.findObject(By.res("kjui_x7q_done"))
 
-        // Step 3: Select the option by index, label, or value
+        if (optionList != null) {
+            // Regular SelectBox with option list
+            selectFromOptionList(step, timeout)
+        } else if (doneButton != null) {
+            // DateSelectBox with wheel picker
+            selectFromDatePicker(step, timeout)
+        } else {
+            throw AssertionError("Neither option list nor date picker appeared within ${timeout}ms")
+        }
+    }
+
+    private fun selectFromOptionList(step: TestStep, timeout: Long) {
+        // Select the option by index, label, or value
         when {
             step.index != null -> {
                 // Select by index (preferred for cross-platform consistency)
@@ -282,8 +295,94 @@ class ActionExecutor(
             }
             else -> throw IllegalArgumentException("selectOption requires 'index', 'label', or 'value'")
         }
-
         // Note: KotlinJsonUI SelectBox auto-closes on selection, no need to tap Done button
+    }
+
+    private fun selectFromDatePicker(step: TestStep, timeout: Long) {
+        val value = step.value ?: throw IllegalArgumentException("selectOption for DateSelectBox requires 'value' with ISO format (e.g., '2024-01-15', '14:30', or '2024-01-15T14:30')")
+
+        // Parse ISO format and select appropriate wheel values
+        when {
+            value.contains("T") -> {
+                // DateTime format: "2024-01-15T14:30"
+                val parts = value.split("T")
+                if (parts.size == 2) {
+                    selectDateComponents(parts[0], timeout)
+                    selectTimeComponents(parts[1], timeout)
+                }
+            }
+            value.contains(":") -> {
+                // Time format: "14:30"
+                selectTimeComponents(value, timeout)
+            }
+            value.contains("-") -> {
+                // Date format: "2024-01-15"
+                selectDateComponents(value, timeout)
+            }
+            else -> throw IllegalArgumentException("Invalid date/time format: $value. Use ISO format (e.g., '2024-01-15', '14:30', or '2024-01-15T14:30')")
+        }
+
+        // Tap Done button to confirm selection
+        val doneButton = waitForElement("kjui_x7q_done", timeout)
+        doneButton.click()
+    }
+
+    private fun selectDateComponents(dateString: String, timeout: Long) {
+        // Parse "2024-01-15" format
+        val parts = dateString.split("-")
+        if (parts.size != 3) {
+            throw IllegalArgumentException("Invalid date format: $dateString. Expected YYYY-MM-DD")
+        }
+
+        val year = parts[0].toIntOrNull() ?: throw IllegalArgumentException("Invalid year: ${parts[0]}")
+        val month = parts[1].toIntOrNull() ?: throw IllegalArgumentException("Invalid month: ${parts[1]}")
+        val day = parts[2].toIntOrNull() ?: throw IllegalArgumentException("Invalid day: ${parts[2]}")
+
+        // Click on year wheel item
+        val yearElement = device.findObject(By.res("kjui_x7q_year_$year"))
+        if (yearElement != null) {
+            yearElement.click()
+            Thread.sleep(100)
+        }
+
+        // Click on month wheel item (0-indexed internally)
+        val monthElement = device.findObject(By.res("kjui_x7q_month_${month - 1}"))
+        if (monthElement != null) {
+            monthElement.click()
+            Thread.sleep(100)
+        }
+
+        // Click on day wheel item
+        val dayElement = device.findObject(By.res("kjui_x7q_day_$day"))
+        if (dayElement != null) {
+            dayElement.click()
+            Thread.sleep(100)
+        }
+    }
+
+    private fun selectTimeComponents(timeString: String, timeout: Long) {
+        // Parse "14:30" format
+        val parts = timeString.split(":")
+        if (parts.size < 2) {
+            throw IllegalArgumentException("Invalid time format: $timeString. Expected HH:mm")
+        }
+
+        val hour = parts[0].toIntOrNull() ?: throw IllegalArgumentException("Invalid hour: ${parts[0]}")
+        val minute = parts[1].toIntOrNull() ?: throw IllegalArgumentException("Invalid minute: ${parts[1]}")
+
+        // Click on hour wheel item
+        val hourElement = device.findObject(By.res("kjui_x7q_hour_$hour"))
+        if (hourElement != null) {
+            hourElement.click()
+            Thread.sleep(100)
+        }
+
+        // Click on minute wheel item
+        val minuteElement = device.findObject(By.res("kjui_x7q_minute_$minute"))
+        if (minuteElement != null) {
+            minuteElement.click()
+            Thread.sleep(100)
+        }
     }
 
     // Helper functions
