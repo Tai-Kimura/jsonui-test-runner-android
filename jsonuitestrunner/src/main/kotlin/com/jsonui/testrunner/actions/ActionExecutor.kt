@@ -36,6 +36,7 @@ class ActionExecutor(
             "screenshot" -> executeScreenshot(step)
             "alertTap" -> executeAlertTap(step, timeout)
             "selectOption" -> executeSelectOption(step, timeout)
+            "tapItem" -> executeTapItem(step, timeout)
             else -> throw IllegalArgumentException("Unknown action: $action")
         }
     }
@@ -240,6 +241,16 @@ class ActionExecutor(
         }
 
         throw AssertionError("Alert button '$buttonText' not found within ${timeout}ms")
+    }
+
+    private fun executeTapItem(step: TestStep, timeout: Long) {
+        val id = step.id ?: throw IllegalArgumentException("tapItem requires 'id'")
+        val index = step.index ?: throw IllegalArgumentException("tapItem requires 'index'")
+
+        // Find the item using the generated testTag pattern: {collectionId}_item_{index}
+        val itemId = "${id}_item_${index}"
+        val element = waitForElement(itemId, timeout)
+        element.click()
     }
 
     private fun executeSelectOption(step: TestStep, timeout: Long) {
