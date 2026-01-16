@@ -37,6 +37,7 @@ class ActionExecutor(
             "alertTap" -> executeAlertTap(step, timeout)
             "selectOption" -> executeSelectOption(step, timeout)
             "tapItem" -> executeTapItem(step, timeout)
+            "selectTab" -> executeSelectTab(step, timeout)
             else -> throw IllegalArgumentException("Unknown action: $action")
         }
     }
@@ -250,6 +251,16 @@ class ActionExecutor(
         // Find the item using the generated testTag pattern: {collectionId}_item_{index}
         val itemId = "${id}_item_${index}"
         val element = waitForElement(itemId, timeout)
+        element.click()
+    }
+
+    private fun executeSelectTab(step: TestStep, timeout: Long) {
+        val id = step.id ?: throw IllegalArgumentException("selectTab requires 'id'")
+        val index = step.index ?: throw IllegalArgumentException("selectTab requires 'index'")
+
+        // Find the tab using the generated testTag pattern: {tabViewId}_tab_{index}
+        val tabId = "${id}_tab_${index}"
+        val element = waitForElement(tabId, timeout)
         element.click()
     }
 
