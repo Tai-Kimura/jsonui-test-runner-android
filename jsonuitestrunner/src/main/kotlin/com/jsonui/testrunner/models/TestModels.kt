@@ -101,10 +101,18 @@ data class FlowTestStep(
     val file: String? = null,
     @kotlinx.serialization.SerialName("case")
     val caseName: String? = null,
-    val cases: List<String>? = null
+    val cases: List<String>? = null,
+    // For block steps (grouped inline actions)
+    val block: String? = null,
+    val description: String? = null,
+    val descriptionFile: String? = null,
+    val steps: List<FlowTestStep>? = null
 ) {
     /** Whether this is a file reference step */
     val isFileReference: Boolean get() = file != null
+
+    /** Whether this is a block step */
+    val isBlockStep: Boolean get() = block != null
 
     /** Whether this is an inline action/assertion step */
     val isInlineStep: Boolean get() = screen != null && (action != null || assert != null)

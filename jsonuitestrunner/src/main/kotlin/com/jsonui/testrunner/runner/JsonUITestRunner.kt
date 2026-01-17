@@ -267,6 +267,12 @@ class JsonUITestRunner(
             return
         }
 
+        // Handle block steps (grouped inline actions)
+        if (step.isBlockStep) {
+            executeBlockStep(step)
+            return
+        }
+
         // Handle inline steps - convert FlowTestStep to TestStep and execute
         val testStep = TestStep(
             action = step.action,
@@ -285,6 +291,34 @@ class JsonUITestRunner(
             amount = step.amount
         )
         executeStep(testStep)
+    }
+
+    private fun executeBlockStep(step: FlowTestStep) {
+        val blockSteps = step.steps ?: return
+
+        log("    Executing block: ${step.block}")
+
+        // Execute each step in the block
+        for (innerStep in blockSteps) {
+            // Block steps can only contain action/assert steps (no nested blocks or file references)
+            val testStep = TestStep(
+                action = innerStep.action,
+                assert = innerStep.assert,
+                id = innerStep.id,
+                ids = innerStep.ids,
+                value = innerStep.value,
+                direction = innerStep.direction,
+                duration = innerStep.duration,
+                timeout = innerStep.timeout,
+                ms = innerStep.ms,
+                name = innerStep.name,
+                equals = innerStep.equals,
+                contains = innerStep.contains,
+                path = innerStep.path,
+                amount = innerStep.amount
+            )
+            executeStep(testStep)
+        }
     }
 
     private fun executeFileReferenceStep(step: FlowTestStep) {
