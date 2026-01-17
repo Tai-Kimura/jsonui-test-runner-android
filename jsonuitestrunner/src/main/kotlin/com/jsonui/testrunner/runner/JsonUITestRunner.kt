@@ -35,6 +35,9 @@ class JsonUITestRunner(
     private val actionExecutor = ActionExecutor(device, config.defaultTimeout)
     private val assertionExecutor = AssertionExecutor(device, config.defaultTimeout)
 
+    /** Test loader for file reference resolution */
+    var testLoader: TestLoader? = null
+
     /**
      * Run a loaded test
      */
@@ -240,7 +243,11 @@ class JsonUITestRunner(
 
     private fun executeFlowSteps(steps: List<FlowTestStep>) {
         for ((index, step) in steps.withIndex()) {
-            log("  Flow step ${index + 1}: screen=${step.screen}")
+            if (step.isFileReference) {
+                log("  Flow step ${index + 1}: file=${step.file}")
+            } else {
+                log("  Flow step ${index + 1}: screen=${step.screen}")
+            }
             executeFlowStep(step)
         }
     }
@@ -254,7 +261,13 @@ class JsonUITestRunner(
     }
 
     private fun executeFlowStep(step: FlowTestStep) {
-        // Convert FlowTestStep to TestStep and execute
+        // Handle file reference steps
+        if (step.isFileReference) {
+            executeFileReferenceStep(step)
+            return
+        }
+
+        // Handle inline steps - convert FlowTestStep to TestStep and execute
         val testStep = TestStep(
             action = step.action,
             assert = step.assert,
@@ -272,6 +285,36 @@ class JsonUITestRunner(
             amount = step.amount
         )
         executeStep(testStep)
+    }
+
+    private fun executeFileReferenceStep(step: FlowTestStep) {
+        val loader = testLoader
+            ?: throw IllegalStateException("TestLoader not set for file reference resolution: ${step.file}")
+
+        val testCases = loader.resolveFileReferenceCases(step)
+
+        for (testCase in testCases) {
+            // Skip if marked to skip
+            if (testCase.skip == true) {
+                log("    Skipping case: ${testCase.name}")
+                continue
+            }
+
+            // Check platform compatibility
+            testCase.platform?.let { platform ->
+                if (!platform.includes(config.platform)) {
+                    log("    Skipping case ${testCase.name} - platform mismatch")
+                    return@let
+                }
+            }
+
+            log("    Running referenced case: ${testCase.name}")
+
+            // Execute each step in the test case
+            for (testStep in testCase.steps) {
+                executeStep(testStep)
+            }
+        }
     }
 
     private fun stepDescription(step: TestStep): String {

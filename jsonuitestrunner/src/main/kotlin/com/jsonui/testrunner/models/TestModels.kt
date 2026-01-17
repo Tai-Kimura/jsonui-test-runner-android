@@ -52,7 +52,7 @@ data class TestCase(
 @Serializable
 data class FlowTest(
     val type: String,
-    val sources: List<FlowTestSource>,
+    val sources: List<FlowTestSource>? = null,  // Now optional (not needed when using file references)
     val metadata: TestMetadata,
     val platform: PlatformTarget? = null,
     val initialState: FlowInitialState? = null,
@@ -77,7 +77,8 @@ data class FlowInitialState(
 
 @Serializable
 data class FlowTestStep(
-    val screen: String,
+    // For inline steps
+    val screen: String? = null,
     val action: String? = null,
     val assert: String? = null,
     val id: String? = null,
@@ -95,8 +96,19 @@ data class FlowTestStep(
     val amount: Int? = null,
     val button: String? = null,
     val label: String? = null,
-    val index: Int? = null
-)
+    val index: Int? = null,
+    // For file reference steps
+    val file: String? = null,
+    @kotlinx.serialization.SerialName("case")
+    val caseName: String? = null,
+    val cases: List<String>? = null
+) {
+    /** Whether this is a file reference step */
+    val isFileReference: Boolean get() = file != null
+
+    /** Whether this is an inline action/assertion step */
+    val isInlineStep: Boolean get() = screen != null && (action != null || assert != null)
+}
 
 @Serializable
 data class Checkpoint(

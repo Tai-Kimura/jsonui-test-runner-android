@@ -2,11 +2,19 @@ package com.jsonui.testrunner.runner
 
 import android.content.Context
 import com.jsonui.testrunner.models.FlowTest
+import com.jsonui.testrunner.models.FlowTestStep
 import com.jsonui.testrunner.models.ScreenTest
+import com.jsonui.testrunner.models.TestCase
 import com.jsonui.testrunner.models.TestMetadata
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.InputStream
+
+/**
+ * Errors that can occur during test loading
+ */
+class CaseNotFoundException(caseName: String, file: String) : Exception("Test case '$caseName' not found in file: $file")
+class NotAScreenTestException(file: String) : Exception("File reference must point to a screen test: $file")
 
 /**
  * Represents a loaded test file
@@ -40,6 +48,15 @@ class TestLoader {
         isLenient = true
     }
 
+    /** Base path for resolving relative file references */
+    var basePath: String? = null
+        private set
+
+    /** Set base path from a file path */
+    fun setBasePath(filePath: String) {
+        basePath = File(filePath).parent
+    }
+
     /**
      * Load a test from a file path
      */
@@ -48,6 +65,8 @@ class TestLoader {
         if (!file.exists()) {
             throw IllegalArgumentException("Test file not found: $path")
         }
+        // Store base path for file reference resolution
+        basePath = file.parent
         return parseTest(file.readText(), path)
     }
 
@@ -126,5 +145,69 @@ class TestLoader {
             }
             else -> throw IllegalArgumentException("Unknown test type: $type")
         }
+    }
+
+    // MARK: - File Reference Resolution
+
+    /**
+     * Resolve a file reference to a ScreenTest
+     */
+    fun resolveFileReference(fileRef: String): ScreenTest {
+        val url = resolveFileReferenceURL(fileRef)
+        val loadedTest = load(url)
+
+        return when (loadedTest) {
+            is LoadedTest.Screen -> loadedTest.test
+            is LoadedTest.Flow -> throw NotAScreenTestException(fileRef)
+        }
+    }
+
+    /**
+     * Resolve a file reference to test cases
+     */
+    fun resolveFileReferenceCases(step: FlowTestStep): List<TestCase> {
+        val fileRef = step.file ?: return emptyList()
+
+        val screenTest = resolveFileReference(fileRef)
+
+        // If specific case is requested
+        step.caseName?.let { caseName ->
+            val testCase = screenTest.cases.find { it.name == caseName }
+                ?: throw CaseNotFoundException(caseName, fileRef)
+            return listOf(testCase)
+        }
+
+        // If specific cases are requested
+        step.cases?.takeIf { it.isNotEmpty() }?.let { caseNames ->
+            return caseNames.map { caseName ->
+                screenTest.cases.find { it.name == caseName }
+                    ?: throw CaseNotFoundException(caseName, fileRef)
+            }
+        }
+
+        // Return all cases if no specific case requested
+        return screenTest.cases
+    }
+
+    /**
+     * Resolve a file reference path to an absolute path
+     */
+    private fun resolveFileReferenceURL(fileRef: String): String {
+        val base = basePath ?: throw IllegalArgumentException("Base path not set for file reference resolution")
+
+        // Try different file extensions
+        val candidates = listOf(
+            File(base, "$fileRef.test.json"),
+            File(base, "$fileRef.json"),
+            File(base, fileRef)
+        )
+
+        for (candidate in candidates) {
+            if (candidate.exists()) {
+                return candidate.absolutePath
+            }
+        }
+
+        throw IllegalArgumentException("Test file not found: $fileRef")
     }
 }
