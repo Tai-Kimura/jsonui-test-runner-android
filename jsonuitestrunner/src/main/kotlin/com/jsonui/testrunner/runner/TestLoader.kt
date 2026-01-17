@@ -195,8 +195,16 @@ class TestLoader {
     private fun resolveFileReferenceURL(fileRef: String): String {
         val base = basePath ?: throw IllegalArgumentException("Base path not set for file reference resolution")
 
-        // Try different file extensions
+        // Parent of basePath (e.g., tests/ when basePath is tests/flows/)
+        val parentBase = File(base).parent
+
+        // Try different locations and file extensions
+        // Priority: ../screens/ (sibling directory) first, then same directory
         val candidates = listOf(
+            File(parentBase, "screens/$fileRef/$fileRef.test.json"),
+            File(parentBase, "screens/$fileRef/$fileRef.json"),
+            File(parentBase, "screens/$fileRef.test.json"),
+            File(parentBase, "screens/$fileRef.json"),
             File(base, "$fileRef.test.json"),
             File(base, "$fileRef.json"),
             File(base, fileRef)
