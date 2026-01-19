@@ -5,8 +5,15 @@ import com.jsonui.testrunner.models.FlowTest
 import com.jsonui.testrunner.models.FlowTestStep
 import com.jsonui.testrunner.models.ScreenTest
 import com.jsonui.testrunner.models.TestCase
+import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.models.TestMetadata
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import java.io.File
 import java.io.InputStream
 
@@ -163,30 +170,129 @@ class TestLoader {
     }
 
     /**
-     * Resolve a file reference to test cases
+     * Resolve a file reference to test cases with args substitution
      */
     fun resolveFileReferenceCases(step: FlowTestStep): List<TestCase> {
         val fileRef = step.file ?: return emptyList()
 
         val screenTest = resolveFileReference(fileRef)
+        val flowArgs = step.args ?: emptyMap()
 
         // If specific case is requested
         step.caseName?.let { caseName ->
             val testCase = screenTest.cases.find { it.name == caseName }
                 ?: throw CaseNotFoundException(caseName, fileRef)
-            return listOf(testCase)
+            return listOf(applyArgsSubstitution(testCase, flowArgs))
         }
 
         // If specific cases are requested
         step.cases?.takeIf { it.isNotEmpty() }?.let { caseNames ->
             return caseNames.map { caseName ->
-                screenTest.cases.find { it.name == caseName }
+                val testCase = screenTest.cases.find { it.name == caseName }
                     ?: throw CaseNotFoundException(caseName, fileRef)
+                applyArgsSubstitution(testCase, flowArgs)
             }
         }
 
         // Return all cases if no specific case requested
-        return screenTest.cases
+        return screenTest.cases.map { applyArgsSubstitution(it, flowArgs) }
+    }
+
+    /**
+     * Apply args substitution to a test case.
+     * Merges screen default args with flow override args, then substitutes @{varName} placeholders.
+     */
+    fun applyArgsSubstitution(testCase: TestCase, flowArgs: Map<String, JsonElement> = emptyMap()): TestCase {
+        // Merge screen default args with flow override args
+        val mergedArgs = mutableMapOf<String, Any>()
+        testCase.args?.forEach { (key, value) ->
+            mergedArgs[key] = jsonElementToValue(value)
+        }
+        flowArgs.forEach { (key, value) ->
+            mergedArgs[key] = jsonElementToValue(value)
+        }
+
+        // If no args, return original test case
+        if (mergedArgs.isEmpty()) {
+            return testCase
+        }
+
+        // Apply substitution to steps
+        val substitutedSteps = testCase.steps.map { substituteArgsInStep(it, mergedArgs) }
+
+        return testCase.copy(steps = substitutedSteps)
+    }
+
+    /**
+     * Substitute @{varName} placeholders in a TestStep
+     */
+    private fun substituteArgsInStep(step: TestStep, args: Map<String, Any>): TestStep {
+        return step.copy(
+            id = substituteArgsInString(step.id, args),
+            ids = step.ids?.map { substituteArgsInString(it, args) ?: it },
+            text = substituteArgsInString(step.text, args),
+            value = substituteArgsInString(step.value, args),
+            contains = substituteArgsInString(step.contains, args),
+            button = substituteArgsInString(step.button, args),
+            label = substituteArgsInString(step.label, args),
+            equals = substituteArgsInJsonElement(step.equals, args)
+        )
+    }
+
+    /**
+     * Substitute @{varName} placeholders in a string
+     */
+    private fun substituteArgsInString(string: String?, args: Map<String, Any>): String? {
+        if (string == null) return null
+
+        var result = string
+        val pattern = """@\{([^}]+)\}""".toRegex()
+
+        pattern.findAll(string).toList().reversed().forEach { match ->
+            val varName = match.groupValues[1]
+            args[varName]?.let { value ->
+                result = result.replaceRange(match.range, valueToString(value))
+            }
+        }
+
+        return result
+    }
+
+    /**
+     * Substitute @{varName} placeholders in JsonElement (only for string values)
+     */
+    private fun substituteArgsInJsonElement(element: JsonElement?, args: Map<String, Any>): JsonElement? {
+        if (element == null) return null
+        if (element is JsonPrimitive && element.isString) {
+            val substituted = substituteArgsInString(element.content, args)
+            return JsonPrimitive(substituted)
+        }
+        return element
+    }
+
+    /**
+     * Convert JsonElement to primitive value
+     */
+    private fun jsonElementToValue(element: JsonElement): Any {
+        return when {
+            element is JsonPrimitive -> {
+                element.booleanOrNull ?: element.intOrNull ?: element.doubleOrNull ?: element.contentOrNull ?: ""
+            }
+            else -> element.toString()
+        }
+    }
+
+    /**
+     * Convert Any to String for substitution
+     */
+    private fun valueToString(value: Any): String {
+        return when (value) {
+            is String -> value
+            is Int -> value.toString()
+            is Double -> value.toString()
+            is Boolean -> value.toString()
+            else -> value.toString()
+        }
     }
 
     /**

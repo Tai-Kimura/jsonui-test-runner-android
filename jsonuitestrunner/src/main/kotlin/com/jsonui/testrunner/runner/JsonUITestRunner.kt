@@ -211,8 +211,12 @@ class JsonUITestRunner(
 
         log("Running case: ${testCase.name}")
 
+        // Apply args substitution if test case has args
+        val processedCase = testLoader?.applyArgsSubstitution(testCase)
+            ?: applyArgsSubstitutionLocally(testCase)
+
         return try {
-            executeSteps(testCase.steps)
+            executeSteps(processedCase.steps)
             TestResult(
                 testName = testName,
                 caseName = testCase.name,
@@ -377,4 +381,111 @@ class JsonUITestRunner(
             println("[JsonUITestRunner] $message")
         }
     }
+
+    // MARK: - Args Substitution (Local fallback when testLoader is not available)
+
+    /**
+     * Apply args substitution locally when testLoader is not set
+     */
+    private fun applyArgsSubstitutionLocally(testCase: TestCase): TestCase {
+        val args = testCase.args
+        if (args.isNullOrEmpty()) {
+            return testCase
+        }
+
+        // Convert JsonElement args to Map<String, Any>
+        val argsMap = mutableMapOf<String, Any>()
+        args.forEach { (key, value) ->
+            argsMap[key] = jsonElementToValue(value)
+        }
+
+        // Apply substitution to steps
+        val substitutedSteps = testCase.steps.map { substituteArgsInStep(it, argsMap) }
+
+        return testCase.copy(steps = substitutedSteps)
+    }
+
+    /**
+     * Substitute @{varName} placeholders in a TestStep
+     */
+    private fun substituteArgsInStep(step: TestStep, args: Map<String, Any>): TestStep {
+        return step.copy(
+            id = substituteArgsInString(step.id, args),
+            ids = step.ids?.map { substituteArgsInString(it, args) ?: it },
+            text = substituteArgsInString(step.text, args),
+            value = substituteArgsInString(step.value, args),
+            contains = substituteArgsInString(step.contains, args),
+            button = substituteArgsInString(step.button, args),
+            label = substituteArgsInString(step.label, args),
+            equals = substituteArgsInJsonElement(step.equals, args)
+        )
+    }
+
+    /**
+     * Substitute @{varName} placeholders in a string
+     */
+    private fun substituteArgsInString(string: String?, args: Map<String, Any>): String? {
+        if (string == null) return null
+
+        var result = string
+        val pattern = """@\{([^}]+)\}""".toRegex()
+
+        pattern.findAll(string).toList().reversed().forEach { match ->
+            val varName = match.groupValues[1]
+            args[varName]?.let { value ->
+                result = result.replaceRange(match.range, valueToString(value))
+            }
+        }
+
+        return result
+    }
+
+    /**
+     * Substitute @{varName} placeholders in JsonElement (only for string values)
+     */
+    private fun substituteArgsInJsonElement(element: kotlinx.serialization.json.JsonElement?, args: Map<String, Any>): kotlinx.serialization.json.JsonElement? {
+        if (element == null) return null
+        if (element is kotlinx.serialization.json.JsonPrimitive && element.isString) {
+            val substituted = substituteArgsInString(element.content, args)
+            return kotlinx.serialization.json.JsonPrimitive(substituted)
+        }
+        return element
+    }
+
+    /**
+     * Convert JsonElement to primitive value
+     */
+    private fun jsonElementToValue(element: kotlinx.serialization.json.JsonElement): Any {
+        return when {
+            element is kotlinx.serialization.json.JsonPrimitive -> {
+                element.booleanOrNull ?: element.intOrNull ?: element.doubleOrNull ?: element.contentOrNull ?: ""
+            }
+            else -> element.toString()
+        }
+    }
+
+    /**
+     * Convert Any to String for substitution
+     */
+    private fun valueToString(value: Any): String {
+        return when (value) {
+            is String -> value
+            is Int -> value.toString()
+            is Double -> value.toString()
+            is Boolean -> value.toString()
+            else -> value.toString()
+        }
+    }
+
+    private val kotlinx.serialization.json.JsonPrimitive.booleanOrNull: Boolean?
+        get() = if (this.isString) null else this.content.toBooleanStrictOrNull()
+
+    private val kotlinx.serialization.json.JsonPrimitive.intOrNull: Int?
+        get() = this.content.toIntOrNull()
+
+    private val kotlinx.serialization.json.JsonPrimitive.doubleOrNull: Double?
+        get() = this.content.toDoubleOrNull()
+
+    private val kotlinx.serialization.json.JsonPrimitive.contentOrNull: String?
+        get() = if (this.isString) this.content else null
 }

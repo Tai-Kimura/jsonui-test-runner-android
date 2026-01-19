@@ -44,7 +44,9 @@ data class TestCase(
     val skip: Boolean? = null,
     val platform: PlatformTarget? = null,
     val initialState: InitialState? = null,
-    val steps: List<TestStep>
+    val steps: List<TestStep>,
+    /** Default argument values for @{varName} substitution */
+    val args: Map<String, JsonElement>? = null
 )
 
 // MARK: - Flow Test
@@ -102,6 +104,8 @@ data class FlowTestStep(
     @kotlinx.serialization.SerialName("case")
     val caseName: String? = null,
     val cases: List<String>? = null,
+    /** Arguments to override screen test default args (for file reference steps) */
+    val args: Map<String, JsonElement>? = null,
     // For block steps (grouped inline actions)
     val block: String? = null,
     val description: String? = null,
