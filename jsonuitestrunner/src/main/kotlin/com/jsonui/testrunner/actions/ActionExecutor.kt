@@ -296,8 +296,11 @@ class ActionExecutor(
                 optionElement.click()
             }
             step.label != null || step.value != null -> {
-                // Fallback: select by text (label or value)
-                val text = step.label ?: step.value
+                // Fallback: select by text (label or value).
+                // Explicit non-null binding: Kotlin 2.x no longer smart-casts
+                // `step.label ?: step.value` to String here.
+                val text: String = step.label ?: step.value
+                    ?: throw IllegalArgumentException("selectOption requires 'label' or 'value'")
                 val startTime = System.currentTimeMillis()
                 var found = false
 

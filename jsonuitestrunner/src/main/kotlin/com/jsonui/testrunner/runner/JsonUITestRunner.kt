@@ -425,12 +425,14 @@ class JsonUITestRunner(
      * Substitute @{varName} placeholders in a string
      */
     private fun substituteArgsInString(string: String?, args: Map<String, Any>): String? {
-        if (string == null) return null
+        // Kotlin 2.x drops the smart cast on the lambda-captured `var result`,
+        // so bind a non-null local explicitly (compiles under K1 and K2).
+        val input: String = string ?: return null
 
-        var result = string
+        var result: String = input
         val pattern = """@\{([^}]+)\}""".toRegex()
 
-        pattern.findAll(string).toList().reversed().forEach { match ->
+        pattern.findAll(input).toList().reversed().forEach { match ->
             val varName = match.groupValues[1]
             args[varName]?.let { value ->
                 result = result.replaceRange(match.range, valueToString(value))
