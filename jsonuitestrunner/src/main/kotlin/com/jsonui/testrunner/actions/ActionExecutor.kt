@@ -1,9 +1,11 @@
 package com.jsonui.testrunner.actions
 
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.jsonui.testrunner.models.TestStep
+import java.io.File
 
 /**
  * Executes test actions using UI Automator
@@ -13,6 +15,14 @@ class ActionExecutor(
     private val device: UiDevice,
     private val defaultTimeout: Long = 5000L
 ) {
+
+    /**
+     * Pluggable sink for the `screenshot` action. When set, the embedding
+     * harness receives the screenshot name and owns capture + storage.
+     * When null, the default implementation saves a PNG via
+     * UiDevice.takeScreenshot into the instrumented app's filesDir.
+     */
+    var screenshotHandler: ((name: String) -> Unit)? = null
 
     /**
      * Execute an action step
@@ -202,8 +212,16 @@ class ActionExecutor(
 
     private fun executeScreenshot(step: TestStep) {
         val name = step.name ?: "screenshot_${System.currentTimeMillis()}"
-        // Screenshot will be handled by the test runner
-        // This is a placeholder - actual implementation depends on test framework setup
+
+        val handler = screenshotHandler
+        if (handler != null) {
+            handler(name)
+            return
+        }
+
+        // Default: save a PNG like the iOS / web drivers do
+        val dir = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+        device.takeScreenshot(File(dir, "$name.png"))
     }
 
     private fun executeAlertTap(step: TestStep, timeout: Long) {

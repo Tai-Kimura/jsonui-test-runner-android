@@ -19,7 +19,13 @@ data class TestRunnerConfig(
     val defaultTimeout: Long = 5000L,
     val screenshotOnFailure: Boolean = true,
     val platform: String = "android",
-    val verbose: Boolean = false
+    val verbose: Boolean = false,
+    /**
+     * Directory where screenshots (both `screenshot` action steps and
+     * failure screenshots) are saved. Defaults to the instrumented app's
+     * filesDir when null.
+     */
+    val screenshotDir: java.io.File? = null
 )
 
 /**
@@ -32,7 +38,11 @@ class JsonUITestRunner(
         InstrumentationRegistry.getInstrumentation()
     )
 
-    private val actionExecutor = ActionExecutor(device, config.defaultTimeout)
+    private val actionExecutor = ActionExecutor(device, config.defaultTimeout).apply {
+        // Route `screenshot` action steps through the same (config-aware)
+        // capture path as failure screenshots.
+        screenshotHandler = { name -> takeScreenshot(name) }
+    }
     private val assertionExecutor = AssertionExecutor(device, config.defaultTimeout)
 
     /** Test loader for file reference resolution */
@@ -365,10 +375,10 @@ class JsonUITestRunner(
 
     private fun takeScreenshot(name: String) {
         try {
-            val file = java.io.File(
-                InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
-                "$name.png"
-            )
+            val dir = config.screenshotDir
+                ?: InstrumentationRegistry.getInstrumentation().targetContext.filesDir
+            dir.mkdirs()
+            val file = java.io.File(dir, "$name.png")
             device.takeScreenshot(file)
             log("Screenshot saved: ${file.absolutePath}")
         } catch (e: Exception) {
