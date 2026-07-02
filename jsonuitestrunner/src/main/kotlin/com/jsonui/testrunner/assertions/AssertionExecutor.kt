@@ -79,10 +79,21 @@ class AssertionExecutor(
 
         // For Compose TextField, the text is in the child EditText element
         val editText = element.findObject(By.clazz("android.widget.EditText"))
-        val actualText = if (editText != null) {
+        var actualText = if (editText != null) {
             editText.text ?: ""
         } else {
             element.text ?: ""
+        }
+
+        // Compose controls (Button, labeled CheckBox/Radio rows, ...) expose
+        // their label on child text nodes, not on the testTag'd container,
+        // while iOS (XCUITest label) and web (textContent) include descendant
+        // text. Mirror that: aggregate descendant text when the node has none.
+        if (actualText.isEmpty()) {
+            actualText = element.findObjects(By.clazz("android.widget.TextView"))
+                .mapNotNull { it.text }
+                .filter { it.isNotEmpty() }
+                .joinToString(" ")
         }
 
         when {
