@@ -2,7 +2,8 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
-    `maven-publish`
+    id("com.vanniktech.maven.publish") version "0.29.0"
+    id("signing")
 }
 
 android {
@@ -47,16 +48,44 @@ dependencies {
     api(libs.junit)
 }
 
-publishing {
-    publications {
-        register<MavenPublication>("release") {
-            groupId = "com.jsonui"
-            artifactId = "testrunner"
-            version = "1.0.0"
+signing {
+    val signingKey = project.findProperty("signing.key") as String?
+    val signingPassword = project.findProperty("signing.password") as String?
 
-            afterEvaluate {
-                from(components["release"])
+    if (signingKey != null && signingPassword != null) {
+        useInMemoryPgpKeys(signingKey, signingPassword)
+    }
+}
+
+mavenPublishing {
+    publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+    signAllPublications()
+
+    coordinates("io.github.tai-kimura", "jsonui-test-runner-android", "1.0.0")
+
+    pom {
+        name.set("JsonUI Test Runner (Android)")
+        description.set("Android (UIAutomator) driver for running JsonUI JSON-based UI tests")
+        url.set("https://github.com/Tai-Kimura/jsonui-test-runner-android")
+
+        licenses {
+            license {
+                name.set("The Apache License, Version 2.0")
+                url.set("http://www.apache.org/licenses/LICENSE-2.0.txt")
             }
+        }
+
+        developers {
+            developer {
+                id.set("tai-kimura")
+                name.set("Taichiro Kimura")
+            }
+        }
+
+        scm {
+            connection.set("scm:git:git://github.com/Tai-Kimura/jsonui-test-runner-android.git")
+            developerConnection.set("scm:git:ssh://github.com/Tai-Kimura/jsonui-test-runner-android.git")
+            url.set("https://github.com/Tai-Kimura/jsonui-test-runner-android")
         }
     }
 }
