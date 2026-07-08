@@ -4,11 +4,13 @@ Cross-platform UI test runner for Android using Espresso and UI Automator.
 
 ## Installation
 
+Published to Maven Central. Make sure `mavenCentral()` is in your repositories.
+
 ### Gradle (Kotlin DSL)
 
 ```kotlin
 dependencies {
-    androidTestImplementation("com.jsonui:testrunner:1.0.0")
+    androidTestImplementation("io.github.tai-kimura:jsonui-test-runner-android:1.0.0")
 }
 ```
 
@@ -16,27 +18,7 @@ dependencies {
 
 ```groovy
 dependencies {
-    androidTestImplementation 'com.jsonui:testrunner:1.0.0'
-}
-```
-
-### JitPack
-
-Add JitPack repository to your `settings.gradle.kts`:
-
-```kotlin
-dependencyResolutionManagement {
-    repositories {
-        maven { url = uri("https://jitpack.io") }
-    }
-}
-```
-
-Then add the dependency:
-
-```kotlin
-dependencies {
-    androidTestImplementation("com.github.Tai-Kimura:jsonui-test-runner-android:1.0.0")
+    androidTestImplementation 'io.github.tai-kimura:jsonui-test-runner-android:1.0.0'
 }
 ```
 
