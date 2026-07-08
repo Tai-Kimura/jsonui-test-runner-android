@@ -1,5 +1,13 @@
 package com.jsonui.testrunner.actions
 
+import android.content.ContentValues
+import android.content.Context
+import android.graphics.Rect
+import android.location.Criteria
+import android.location.Location
+import android.location.LocationManager
+import android.os.SystemClock
+import android.provider.MediaStore
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
@@ -25,6 +33,20 @@ class ActionExecutor(
     var screenshotHandler: ((name: String) -> Unit)? = null
 
     /**
+     * Runtime variable store shared with the runner. `readText` writes the
+     * element text here; later steps reference it via @{name} placeholders.
+     */
+    var variableStore: MutableMap<String, String>? = null
+
+    /**
+     * Directory for resolving relative `addMedia` paths. Defaults to the
+     * instrumented app's external files dir (falling back to filesDir).
+     * Limitation: the media files must already exist on the device — push
+     * fixtures (e.g. via `adb push` or asset extraction) before the run.
+     */
+    var mediaFixturesDir: File? = null
+
+    /**
      * Execute an action step
      */
     fun execute(step: TestStep) {
@@ -38,6 +60,7 @@ class ActionExecutor(
             "input" -> executeInput(step, timeout)
             "clear" -> executeClear(step, timeout)
             "scroll" -> executeScroll(step, timeout)
+            "scrollUntilVisible" -> executeScrollUntilVisible(step)
             "swipe" -> executeSwipe(step, timeout)
             "waitFor" -> executeWaitFor(step, timeout)
             "waitForAny" -> executeWaitForAny(step, timeout)
@@ -48,6 +71,9 @@ class ActionExecutor(
             "selectOption" -> executeSelectOption(step, timeout)
             "tapItem" -> executeTapItem(step, timeout)
             "selectTab" -> executeSelectTab(step, timeout)
+            "readText" -> executeReadText(step, timeout)
+            "setLocation" -> executeSetLocation(step)
+            "addMedia" -> executeAddMedia(step)
             else -> throw IllegalArgumentException("Unknown action: $action")
         }
     }
@@ -62,6 +88,22 @@ class ActionExecutor(
             tapTextPortion(element, targetText)
         } else {
             element.click()
+        }
+
+        // Ghost-tap mitigation: when the UI did not change after the tap,
+        // tap once more (retryTapIfNoChange semantics).
+        if (step.retryTapIfNoChange == true) {
+            val packageName = InstrumentationRegistry.getInstrumentation().targetContext.packageName
+            val changed = device.waitForWindowUpdate(packageName, 500L)
+            if (!changed) {
+                // Re-find the element; the first tap may have invalidated it
+                val retryElement = waitForElement(id, timeout)
+                if (targetText != null) {
+                    tapTextPortion(retryElement, targetText)
+                } else {
+                    retryElement.click()
+                }
+            }
         }
     }
 
@@ -425,6 +467,151 @@ class ActionExecutor(
         if (minuteElement != null) {
             minuteElement.click()
             Thread.sleep(100)
+        }
+    }
+
+    private fun executeScrollUntilVisible(step: TestStep) {
+        val id = step.id ?: throw IllegalArgumentException("scrollUntilVisible requires 'id'")
+        val direction = step.direction ?: "down"
+        val timeout = step.timeout?.toLong() ?: 20000L
+
+        fun targetVisible(): Boolean = device.findObject(By.res(id)) != null
+
+        if (targetVisible()) return
+
+        // Resolve the scrollable container: explicit id, else fall back to a
+        // screen-center swipe surface.
+        val containerBounds: Rect? = step.container?.let { containerId ->
+            device.findObject(By.res(containerId))?.visibleBounds
+        }
+
+        val startTime = System.currentTimeMillis()
+        var previousSnapshot = ""
+        var unchangedCount = 0
+
+        while (System.currentTimeMillis() - startTime < timeout) {
+            if (containerBounds != null) {
+                scrollWithinBounds(containerBounds, direction)
+            } else {
+                val (sx, sy, ex, ey) = getSwipeCoordinates(direction)
+                device.swipe(sx, sy, ex, ey, 20)
+            }
+
+            if (targetVisible()) return
+
+            // End-reached detection: two consecutive scrolls with no change
+            val snapshot = try {
+                device.findObject(By.pkg(InstrumentationRegistry.getInstrumentation().targetContext.packageName))
+                    ?.let { obj -> obj.children.joinToString("|") { it.resourceName ?: it.text ?: "" } } ?: ""
+            } catch (e: Exception) {
+                ""
+            }
+            if (snapshot.isNotEmpty() && snapshot == previousSnapshot) {
+                unchangedCount++
+                if (unchangedCount >= 1) {
+                    throw AssertionError("Element '$id' not found after scrolling to the end")
+                }
+            } else {
+                unchangedCount = 0
+            }
+            previousSnapshot = snapshot
+        }
+
+        throw AssertionError("Element '$id' did not become visible within ${timeout}ms of scrolling")
+    }
+
+    private fun scrollWithinBounds(bounds: Rect, direction: String) {
+        val cx = bounds.centerX()
+        val cy = bounds.centerY()
+        val dy = (bounds.height() * 0.35).toInt()
+        val dx = (bounds.width() * 0.35).toInt()
+        when (direction) {
+            // Content moves toward `direction`; the finger swipes the opposite way.
+            "up" -> device.swipe(cx, cy - dy, cx, cy + dy, 20)
+            "down" -> device.swipe(cx, cy + dy, cx, cy - dy, 20)
+            "left" -> device.swipe(cx - dx, cy, cx + dx, cy, 20)
+            "right" -> device.swipe(cx + dx, cy, cx - dx, cy, 20)
+            else -> throw IllegalArgumentException("Invalid direction: $direction")
+        }
+    }
+
+    private fun executeReadText(step: TestStep, timeout: Long) {
+        val id = step.id ?: throw IllegalArgumentException("readText requires 'id'")
+        val variable = step.variable ?: throw IllegalArgumentException("readText requires 'variable'")
+        val element = waitForElement(id, timeout)
+        val text = element.text ?: ""
+        val store = variableStore
+            ?: throw IllegalStateException("readText requires a variable store (set ActionExecutor.variableStore)")
+        store[variable] = text
+    }
+
+    private fun executeSetLocation(step: TestStep) {
+        val latitude = step.latitude ?: throw IllegalArgumentException("setLocation requires 'latitude'")
+        val longitude = step.longitude ?: throw IllegalArgumentException("setLocation requires 'longitude'")
+
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val packageName = context.packageName
+        try {
+            // Enable mock locations for the instrumented app
+            device.executeShellCommand("appops set $packageName android:mock_location allow")
+
+            val locationManager = InstrumentationRegistry.getInstrumentation()
+                .context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val provider = LocationManager.GPS_PROVIDER
+            @Suppress("DEPRECATION")
+            locationManager.addTestProvider(
+                provider,
+                false, false, false, false, true, true, true,
+                Criteria.POWER_LOW, Criteria.ACCURACY_FINE
+            )
+            locationManager.setTestProviderEnabled(provider, true)
+            val mockLocation = Location(provider).apply {
+                this.latitude = latitude
+                this.longitude = longitude
+                this.accuracy = 1.0f
+                this.time = System.currentTimeMillis()
+                this.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+            }
+            locationManager.setTestProviderLocation(provider, mockLocation)
+        } catch (e: Exception) {
+            throw AssertionError("setLocation failed: ${e.message}. Ensure the app has mock-location permission.")
+        }
+    }
+
+    private fun executeAddMedia(step: TestStep) {
+        val paths = step.paths ?: throw IllegalArgumentException("addMedia requires 'paths'")
+        if (paths.isEmpty()) throw IllegalArgumentException("addMedia 'paths' must be non-empty")
+
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val baseDir = mediaFixturesDir
+            ?: context.getExternalFilesDir(null)
+            ?: context.filesDir
+
+        for (path in paths) {
+            val file = if (File(path).isAbsolute) File(path) else File(baseDir, path)
+            if (!file.exists()) {
+                throw AssertionError("addMedia file not found: ${file.absolutePath}")
+            }
+            val mimeType = when (file.extension.lowercase()) {
+                "png" -> "image/png"
+                "jpg", "jpeg" -> "image/jpeg"
+                "gif" -> "image/gif"
+                "mp4" -> "video/mp4"
+                else -> throw IllegalArgumentException("addMedia unsupported file type: ${file.name}")
+            }
+            val isVideo = mimeType.startsWith("video/")
+            val collection = if (isVideo) MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(collection, values)
+                ?: throw AssertionError("addMedia could not insert ${file.name} into MediaStore")
+            resolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { it.copyTo(out) }
+            } ?: throw AssertionError("addMedia could not open output stream for ${file.name}")
         }
     }
 

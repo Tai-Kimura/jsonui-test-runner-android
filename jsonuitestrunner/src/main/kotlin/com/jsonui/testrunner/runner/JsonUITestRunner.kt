@@ -1,12 +1,15 @@
 package com.jsonui.testrunner.runner
 
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import com.jsonui.testrunner.actions.ActionExecutor
 import com.jsonui.testrunner.assertions.AssertionExecutor
 import com.jsonui.testrunner.models.FlowTest
 import com.jsonui.testrunner.models.FlowTestStep
+import com.jsonui.testrunner.models.LaunchConfig
 import com.jsonui.testrunner.models.ScreenTest
+import com.jsonui.testrunner.models.StepCondition
 import com.jsonui.testrunner.models.TestCase
 import com.jsonui.testrunner.models.TestResult
 import com.jsonui.testrunner.models.TestStep
@@ -25,7 +28,29 @@ data class TestRunnerConfig(
      * failure screenshots) are saved. Defaults to the instrumented app's
      * filesDir when null.
      */
-    val screenshotDir: java.io.File? = null
+    val screenshotDir: java.io.File? = null,
+    /** Baseline directory for the `screenshot` assertion (default: external files dir) */
+    val baselineDir: java.io.File? = null,
+    /** When true, screenshot baselines are always overwritten and the assertion passes */
+    val updateBaselines: Boolean = false,
+    /** When set, results are written to this file as standardized results JSON */
+    val resultsPath: java.io.File? = null
+)
+
+/** Safety cap for `repeat` with a `while` condition and no `times` */
+private const val REPEAT_WHILE_CAP = 100
+
+/** Cross-platform permission names → Android runtime permissions */
+private val ANDROID_PERMISSION_MAP = mapOf(
+    "camera" to "android.permission.CAMERA",
+    "microphone" to "android.permission.RECORD_AUDIO",
+    "location" to "android.permission.ACCESS_FINE_LOCATION",
+    "notifications" to "android.permission.POST_NOTIFICATIONS",
+    "photos" to "android.permission.READ_MEDIA_IMAGES",
+    "storage" to "android.permission.READ_MEDIA_IMAGES",
+    "contacts" to "android.permission.READ_CONTACTS",
+    "calendar" to "android.permission.READ_CALENDAR",
+    "bluetooth" to "android.permission.BLUETOOTH_CONNECT"
 )
 
 /**
@@ -38,12 +63,30 @@ class JsonUITestRunner(
         InstrumentationRegistry.getInstrumentation()
     )
 
+    /** Runtime variables (readText results), shared with the action executor */
+    private val variables = mutableMapOf<String, String>()
+
+    /** Warnings collected during the current case (drained per-case) */
+    private var currentWarnings = mutableListOf<String>()
+
+    /** State provider for `state` assertions/conditions; inject before running. */
+    var stateProvider: ViewModelStateProvider? = null
+        set(value) {
+            field = value
+            assertionExecutor.stateProvider = value
+        }
+
     private val actionExecutor = ActionExecutor(device, config.defaultTimeout).apply {
         // Route `screenshot` action steps through the same (config-aware)
         // capture path as failure screenshots.
         screenshotHandler = { name -> takeScreenshot(name) }
+        variableStore = variables
     }
-    private val assertionExecutor = AssertionExecutor(device, config.defaultTimeout)
+    private val assertionExecutor = AssertionExecutor(device, config.defaultTimeout).apply {
+        baselineDir = config.baselineDir
+        updateBaselines = config.updateBaselines
+        warningHandler = { message -> currentWarnings.add(message) }
+    }
 
     /** Test loader for file reference resolution */
     var testLoader: TestLoader? = null
@@ -97,40 +140,74 @@ class JsonUITestRunner(
             }
         }
 
-        // Run setup
+        // Apply launch configuration before running cases
+        test.launch?.let { applyLaunch(it) }
+
+        // Run setup once. If it throws, every case is recorded as failed but
+        // teardown still runs (§7 teardown guarantee).
+        var setupError: String? = null
         test.setup?.let { setup ->
             log("Running setup...")
             try {
-                executeSteps(setup)
+                val warnings = mutableListOf<String>()
+                executeSteps(setup, warnings)
             } catch (e: Exception) {
-                log("Setup failed: ${e.message}")
-                throw e
+                setupError = e.message ?: e.toString()
+                log("Setup failed: $setupError")
             }
         }
 
         // Run test cases
         for (testCase in test.cases) {
-            val result = runTestCase(test.metadata.name, testCase)
-            results.add(result)
+            if (testCase.skip == true || testCase.platform?.includes(config.platform) == false) {
+                results.add(TestResult(
+                    testName = test.metadata.name,
+                    caseName = testCase.name,
+                    passed = true,
+                    skipped = true,
+                    durationMs = 0
+                ))
+                continue
+            }
+            if (setupError != null) {
+                results.add(TestResult(
+                    testName = test.metadata.name,
+                    caseName = testCase.name,
+                    passed = false,
+                    error = "setup failed: $setupError",
+                    durationMs = 0
+                ))
+                continue
+            }
+            results.add(runTestCase(test.metadata.name, testCase))
         }
 
-        // Run teardown
+        // Teardown (guaranteed). A teardown failure is recorded as an extra failed result.
         test.teardown?.let { teardown ->
             log("Running teardown...")
             try {
-                executeSteps(teardown)
+                val warnings = mutableListOf<String>()
+                executeSteps(teardown, warnings)
             } catch (e: Exception) {
                 log("Teardown failed: ${e.message}")
+                results.add(TestResult(
+                    testName = test.metadata.name,
+                    caseName = "teardown",
+                    passed = false,
+                    error = e.message,
+                    durationMs = 0
+                ))
             }
         }
 
         val totalDuration = System.currentTimeMillis() - startTime
-
-        return TestSuiteResult(
+        val suiteResult = TestSuiteResult(
             suiteName = test.metadata.name,
             results = results,
             totalDurationMs = totalDuration
         )
+        writeResultsIfNeeded(suiteResult)
+        return suiteResult
     }
 
     /**
@@ -151,86 +228,78 @@ class JsonUITestRunner(
             }
         }
 
-        val result = try {
+        // Apply launch configuration before running
+        test.launch?.let { applyLaunch(it) }
+
+        val results = mutableListOf<TestResult>()
+        currentWarnings = mutableListOf()
+        var flowError: String? = null
+
+        try {
             // Run setup
             test.setup?.let { setup ->
                 log("Running flow setup...")
-                executeFlowSteps(setup)
+                executeFlowSteps(setup, currentWarnings)
             }
 
             // Run flow steps
             log("Running flow steps...")
-            executeFlowSteps(test.steps)
-
-            // Run teardown
-            test.teardown?.let { teardown ->
-                log("Running flow teardown...")
-                executeFlowSteps(teardown)
-            }
-
-            TestResult(
-                testName = test.metadata.name,
-                caseName = "flow",
-                passed = true,
-                durationMs = System.currentTimeMillis() - startTime
-            )
+            executeFlowSteps(test.steps, currentWarnings)
         } catch (e: Exception) {
-            log("Flow test failed: ${e.message}")
-            TestResult(
-                testName = test.metadata.name,
-                caseName = "flow",
-                passed = false,
-                error = e.message,
-                durationMs = System.currentTimeMillis() - startTime
-            )
+            flowError = e.message ?: e.toString()
+            log("Flow test failed: $flowError")
         }
 
-        return TestSuiteResult(
+        results.add(TestResult(
+            testName = test.metadata.name,
+            caseName = "flow",
+            passed = flowError == null,
+            error = flowError,
+            warnings = currentWarnings.toList(),
+            durationMs = System.currentTimeMillis() - startTime
+        ))
+
+        // Teardown (guaranteed), runs even when the flow body failed
+        test.teardown?.let { teardown ->
+            log("Running flow teardown...")
+            try {
+                executeFlowSteps(teardown, mutableListOf())
+            } catch (e: Exception) {
+                results.add(TestResult(
+                    testName = test.metadata.name,
+                    caseName = "teardown",
+                    passed = false,
+                    error = e.message,
+                    durationMs = 0
+                ))
+            }
+        }
+
+        val suiteResult = TestSuiteResult(
             suiteName = test.metadata.name,
-            results = listOf(result),
+            results = results,
             totalDurationMs = System.currentTimeMillis() - startTime
         )
+        writeResultsIfNeeded(suiteResult)
+        return suiteResult
     }
 
     private fun runTestCase(testName: String, testCase: TestCase): TestResult {
         val startTime = System.currentTimeMillis()
-
-        // Check if skipped
-        if (testCase.skip == true) {
-            log("Skipping case: ${testCase.name}")
-            return TestResult(
-                testName = testName,
-                caseName = testCase.name,
-                passed = true,
-                durationMs = 0
-            )
-        }
-
-        // Check platform compatibility
-        testCase.platform?.let { platform ->
-            if (!platform.includes(config.platform)) {
-                log("Skipping case ${testCase.name} - platform mismatch")
-                return TestResult(
-                    testName = testName,
-                    caseName = testCase.name,
-                    passed = true,
-                    durationMs = 0
-                )
-            }
-        }
-
         log("Running case: ${testCase.name}")
+        currentWarnings = mutableListOf()
 
-        // Apply args substitution if test case has args
+        // Apply load-time args substitution if test case has args
         val processedCase = testLoader?.applyArgsSubstitution(testCase)
             ?: applyArgsSubstitutionLocally(testCase)
 
         return try {
-            executeSteps(processedCase.steps)
+            executeSteps(processedCase.steps, currentWarnings)
             TestResult(
                 testName = testName,
                 caseName = testCase.name,
                 passed = true,
+                warnings = currentWarnings.toList(),
                 durationMs = System.currentTimeMillis() - startTime
             )
         } catch (e: Exception) {
@@ -243,30 +312,68 @@ class JsonUITestRunner(
                 caseName = testCase.name,
                 passed = false,
                 error = e.message,
+                warnings = currentWarnings.toList(),
                 durationMs = System.currentTimeMillis() - startTime
             )
         }
     }
 
-    private fun executeSteps(steps: List<TestStep>) {
+    private fun executeSteps(steps: List<TestStep>, warnings: MutableList<String>) {
         for ((index, step) in steps.withIndex()) {
             log("  Step ${index + 1}: ${stepDescription(step)}")
-            executeStep(step)
+            executeStepGuarded(step, warnings)
         }
     }
 
-    private fun executeFlowSteps(steps: List<FlowTestStep>) {
+    private fun executeFlowSteps(steps: List<FlowTestStep>, warnings: MutableList<String>) {
         for ((index, step) in steps.withIndex()) {
             if (step.isFileReference) {
                 log("  Flow step ${index + 1}: file=${step.file}")
+            } else if (step.isBlockStep) {
+                log("  Flow step ${index + 1}: block=${step.block}")
             } else {
                 log("  Flow step ${index + 1}: screen=${step.screen}")
             }
-            executeFlowStep(step)
+            executeFlowStep(step, warnings)
         }
     }
 
-    private fun executeStep(step: TestStep) {
+    /**
+     * Execute a single step honoring `when` (skip), `optional` (failure→warning),
+     * runtime `@{name}` substitution, and control steps (repeat/retry).
+     */
+    private fun executeStepGuarded(rawStep: TestStep, warnings: MutableList<String>) {
+        // Resolve runtime variables (@{name}) at execution time
+        val step = if (variables.isEmpty()) rawStep else substituteArgsInStep(rawStep, variables.toMap())
+
+        // Evaluate `when` pre-condition
+        step.whenCondition?.let { condition ->
+            if (!evaluateCondition(condition)) {
+                log("    Skipped (when not satisfied): ${step.label ?: stepDescription(step)}")
+                return
+            }
+        }
+
+        try {
+            executeStep(step, warnings)
+        } catch (e: Exception) {
+            if (step.optional == true) {
+                val label = step.label ?: step.action ?: step.assert ?: "step"
+                warnings.add("optional step failed ($label): ${e.message}")
+                log("    Optional step failed, continuing: ${e.message}")
+                return
+            }
+            throw e
+        }
+    }
+
+    private fun executeStep(step: TestStep, warnings: MutableList<String>) {
+        // Control steps
+        when (step.action) {
+            "repeat" -> { executeRepeat(step, warnings); return }
+            "retry" -> { executeRetry(step, warnings); return }
+        }
+
         when {
             step.isAction -> actionExecutor.execute(step)
             step.isAssertion -> assertionExecutor.execute(step)
@@ -274,68 +381,102 @@ class JsonUITestRunner(
         }
     }
 
-    private fun executeFlowStep(step: FlowTestStep) {
+    private fun executeRepeat(step: TestStep, warnings: MutableList<String>) {
+        val steps = step.steps ?: emptyList()
+        val times = step.times
+        val whileCondition = step.whileCondition
+
+        if (times != null && whileCondition != null) {
+            for (i in 0 until times) {
+                if (!evaluateCondition(whileCondition)) return
+                executeSteps(steps, warnings)
+            }
+            return
+        }
+        if (times != null) {
+            repeat(times) { executeSteps(steps, warnings) }
+            return
+        }
+        // while only: safety cap
+        if (whileCondition != null) {
+            for (i in 0 until REPEAT_WHILE_CAP) {
+                if (!evaluateCondition(whileCondition)) return
+                executeSteps(steps, warnings)
+            }
+            if (evaluateCondition(whileCondition)) {
+                throw AssertionError("repeat exceeded $REPEAT_WHILE_CAP iterations (possible infinite loop)")
+            }
+        }
+    }
+
+    private fun executeRetry(step: TestStep, warnings: MutableList<String>) {
+        val steps = step.steps ?: emptyList()
+        val maxRetries = (step.maxRetries ?: 1).coerceIn(0, 3)
+        var lastError: Exception? = null
+
+        for (attempt in 0..maxRetries) {
+            try {
+                val attemptWarnings = mutableListOf<String>()
+                executeSteps(steps, attemptWarnings)
+                warnings.addAll(attemptWarnings)
+                return
+            } catch (e: Exception) {
+                lastError = e
+                log("    Retry attempt ${attempt + 1}/${maxRetries + 1} failed")
+            }
+        }
+        throw lastError ?: AssertionError("retry exhausted with no error captured")
+    }
+
+    /**
+     * Evaluate a `when` / `while` condition. Multiple keys are ANDed.
+     */
+    private fun evaluateCondition(condition: StepCondition): Boolean {
+        condition.platform?.let { if (!it.includes(config.platform)) return false }
+        condition.visible?.let { if (device.findObject(By.res(it)) == null) return false }
+        condition.notVisible?.let { if (device.findObject(By.res(it)) != null) return false }
+        condition.state?.let {
+            if (!assertionExecutor.stateMatches(it.path, it.equals)) return false
+        }
+        return true
+    }
+
+    private fun executeFlowStep(step: FlowTestStep, warnings: MutableList<String>) {
+        // Step-level `when` for file / block / inline steps
+        step.whenCondition?.let { condition ->
+            if (!evaluateCondition(condition)) {
+                log("    Skipped flow step (when not satisfied)")
+                return
+            }
+        }
+
         // Handle file reference steps
         if (step.isFileReference) {
-            executeFileReferenceStep(step)
+            executeFileReferenceStep(step, warnings)
             return
         }
 
         // Handle block steps (grouped inline actions)
         if (step.isBlockStep) {
-            executeBlockStep(step)
+            executeBlockStep(step, warnings)
             return
         }
 
         // Handle inline steps - convert FlowTestStep to TestStep and execute
-        val testStep = TestStep(
-            action = step.action,
-            assert = step.assert,
-            id = step.id,
-            ids = step.ids,
-            value = step.value,
-            direction = step.direction,
-            duration = step.duration,
-            timeout = step.timeout,
-            ms = step.ms,
-            name = step.name,
-            equals = step.equals,
-            contains = step.contains,
-            path = step.path,
-            amount = step.amount
-        )
-        executeStep(testStep)
-    }
-
-    private fun executeBlockStep(step: FlowTestStep) {
-        val blockSteps = step.steps ?: return
-
-        log("    Executing block: ${step.block}")
-
-        // Execute each step in the block
-        for (innerStep in blockSteps) {
-            // Block steps can only contain action/assert steps (no nested blocks or file references)
-            val testStep = TestStep(
-                action = innerStep.action,
-                assert = innerStep.assert,
-                id = innerStep.id,
-                ids = innerStep.ids,
-                value = innerStep.value,
-                direction = innerStep.direction,
-                duration = innerStep.duration,
-                timeout = innerStep.timeout,
-                ms = innerStep.ms,
-                name = innerStep.name,
-                equals = innerStep.equals,
-                contains = innerStep.contains,
-                path = innerStep.path,
-                amount = innerStep.amount
-            )
-            executeStep(testStep)
+        if (step.action != null || step.assert != null) {
+            executeStepGuarded(step.toTestStep(), warnings)
         }
     }
 
-    private fun executeFileReferenceStep(step: FlowTestStep) {
+    private fun executeBlockStep(step: FlowTestStep, warnings: MutableList<String>) {
+        val blockSteps = step.steps ?: return
+        log("    Executing block: ${step.block}")
+        for (innerStep in blockSteps) {
+            executeStepGuarded(innerStep.toTestStep(), warnings)
+        }
+    }
+
+    private fun executeFileReferenceStep(step: FlowTestStep, warnings: MutableList<String>) {
         val loader = testLoader
             ?: throw IllegalStateException("TestLoader not set for file reference resolution: ${step.file}")
 
@@ -349,20 +490,95 @@ class JsonUITestRunner(
             }
 
             // Check platform compatibility
-            testCase.platform?.let { platform ->
-                if (!platform.includes(config.platform)) {
-                    log("    Skipping case ${testCase.name} - platform mismatch")
-                    return@let
-                }
+            if (testCase.platform?.includes(config.platform) == false) {
+                log("    Skipping case ${testCase.name} - platform mismatch")
+                continue
             }
 
             log("    Running referenced case: ${testCase.name}")
+            executeSteps(testCase.steps, warnings)
+        }
+    }
 
-            // Execute each step in the test case
-            for (testStep in testCase.steps) {
-                executeStep(testStep)
+    /** Convert an inline / block-child flow step into a TestStep for execution. */
+    private fun FlowTestStep.toTestStep(): TestStep = TestStep(
+        action = action,
+        assert = assert,
+        id = id,
+        ids = ids,
+        text = text,
+        value = value,
+        direction = direction,
+        duration = duration,
+        timeout = timeout,
+        ms = ms,
+        name = name,
+        equals = equals,
+        contains = contains,
+        path = path,
+        amount = amount,
+        button = button,
+        label = label,
+        index = index,
+        retryTapIfNoChange = retryTapIfNoChange,
+        container = container,
+        variable = variable,
+        times = times,
+        whileCondition = whileCondition,
+        steps = steps?.map { it.toTestStep() },
+        maxRetries = maxRetries,
+        latitude = latitude,
+        longitude = longitude,
+        paths = paths,
+        cropId = cropId,
+        threshold = threshold,
+        whenCondition = whenCondition,
+        optional = optional
+    )
+
+    // MARK: - Launch Configuration
+
+    /**
+     * Apply a launch configuration before a test runs. clearState → `pm clear`,
+     * permissions → `pm grant`/`pm revoke`, arguments → stored for the app-side
+     * contract (JSONUI_TEST_ARGS). Best-effort: shell failures are logged.
+     */
+    private fun applyLaunch(launch: LaunchConfig) {
+        val packageName = InstrumentationRegistry.getInstrumentation().targetContext.packageName
+
+        if (launch.clearState == true) {
+            log("Launch: clearing state (pm clear $packageName)")
+            runCatching { device.executeShellCommand("pm clear $packageName") }
+        }
+
+        launch.permissions?.forEach { (name, value) ->
+            val androidPermission = ANDROID_PERMISSION_MAP[name] ?: return@forEach
+            when (value) {
+                "allow" -> runCatching { device.executeShellCommand("pm grant $packageName $androidPermission") }
+                "deny" -> runCatching { device.executeShellCommand("pm revoke $packageName $androidPermission") }
+                "unset" -> { /* leave at system default */ }
             }
         }
+
+        launch.arguments?.let { args ->
+            // Store as JSON for the app-side contract; the app reads JSONUI_TEST_ARGS.
+            val json = kotlinx.serialization.json.JsonObject(args).toString()
+            log("Launch arguments: $json")
+        }
+    }
+
+    // MARK: - Results Output
+
+    private fun writeResultsIfNeeded(suite: TestSuiteResult) {
+        val path = config.resultsPath ?: return
+        runCatching {
+            ResultsWriter.write(
+                suites = listOf(suite),
+                file = path,
+                platform = config.platform,
+                generatedAt = java.time.Instant.now().toString()
+            )
+        }.onFailure { log("Failed to write results: ${it.message}") }
     }
 
     private fun stepDescription(step: TestStep): String {
@@ -427,6 +643,10 @@ class JsonUITestRunner(
             contains = substituteArgsInString(step.contains, args),
             button = substituteArgsInString(step.button, args),
             label = substituteArgsInString(step.label, args),
+            name = substituteArgsInString(step.name, args),
+            path = substituteArgsInString(step.path, args),
+            container = substituteArgsInString(step.container, args),
+            cropId = substituteArgsInString(step.cropId, args),
             equals = substituteArgsInJsonElement(step.equals, args)
         )
     }
