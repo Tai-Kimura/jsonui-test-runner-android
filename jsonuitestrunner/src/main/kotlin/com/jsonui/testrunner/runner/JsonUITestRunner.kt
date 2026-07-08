@@ -34,7 +34,11 @@ data class TestRunnerConfig(
     /** When true, screenshot baselines are always overwritten and the assertion passes */
     val updateBaselines: Boolean = false,
     /** When set, results are written to this file as standardized results JSON */
-    val resultsPath: java.io.File? = null
+    val resultsPath: java.io.File? = null,
+    /** Mock server base URL (e.g. http://10.0.2.2:8790). Required to use `mocks` / `setMocks`. */
+    val mockServerUrl: String? = null,
+    /** Admin token printed by `jsonui-test mock serve`. Required with mockServerUrl. */
+    val mockToken: String? = null
 )
 
 /** Safety cap for `repeat` with a `while` condition and no `times` */
@@ -91,6 +95,18 @@ class JsonUITestRunner(
     /** Test loader for file reference resolution */
     var testLoader: TestLoader? = null
 
+    /** Mock server admin client; null unless mockServerUrl + mockToken are configured. */
+    private val mockClient: MockClient? =
+        if (config.mockServerUrl != null && config.mockToken != null)
+            MockClient(config.mockServerUrl, config.mockToken)
+        else null
+
+    private fun requireMockClient(feature: String): MockClient =
+        mockClient ?: throw IllegalStateException(
+            "'$feature' requires a mock server: set mockServerUrl + mockToken in TestRunnerConfig " +
+                "(from 'jsonui-test mock serve')."
+        )
+
     /**
      * Run a loaded test
      */
@@ -137,6 +153,21 @@ class JsonUITestRunner(
                     results = emptyList(),
                     totalDurationMs = 0
                 )
+            }
+        }
+
+        // Apply the file-level mock scenario set BEFORE the app re-fetches, then
+        // relaunch so the screen renders under the selected scenarios. Scenario
+        // switching is per-file for screen tests; there is no per-case re-open (§8.1).
+        test.mocks?.let { mocks ->
+            try {
+                requireMockClient("mocks").scenarioSet(mocks)
+                relaunchApp()
+            } catch (e: Exception) {
+                val failed = test.cases.map {
+                    TestResult(test.metadata.name, it.name, passed = false, error = e.message, durationMs = 0)
+                }
+                return TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
             }
         }
 
@@ -198,6 +229,11 @@ class JsonUITestRunner(
                     durationMs = 0
                 ))
             }
+        }
+
+        // Reset mock scenarios so state does not leak into the next test file.
+        if (test.mocks != null) {
+            runCatching { mockClient?.reset() }
         }
 
         val totalDuration = System.currentTimeMillis() - startTime
@@ -274,6 +310,9 @@ class JsonUITestRunner(
                 ))
             }
         }
+
+        // Reset mock scenarios so a flow's setMocks state does not leak to the next test.
+        runCatching { mockClient?.reset() }
 
         val suiteResult = TestSuiteResult(
             suiteName = test.metadata.name,
@@ -372,6 +411,11 @@ class JsonUITestRunner(
         when (step.action) {
             "repeat" -> { executeRepeat(step, warnings); return }
             "retry" -> { executeRetry(step, warnings); return }
+            "setMocks" -> {
+                // Switch scenarios mid-flow; the next navigation re-fetches under them.
+                requireMockClient("setMocks").scenarioSet(step.mocks ?: emptyMap())
+                return
+            }
         }
 
         when {
@@ -532,6 +576,7 @@ class JsonUITestRunner(
         paths = paths,
         cropId = cropId,
         threshold = threshold,
+        mocks = mocks,
         whenCondition = whenCondition,
         optional = optional
     )
@@ -565,6 +610,27 @@ class JsonUITestRunner(
             val json = kotlinx.serialization.json.JsonObject(args).toString()
             log("Launch arguments: $json")
         }
+    }
+
+    /**
+     * Relaunch the app under test so a freshly-set mock scenario is fetched.
+     * Uses the package launcher intent with CLEAR_TASK to reset the back stack.
+     */
+    private fun relaunchApp() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        if (intent == null) {
+            log("relaunchApp: no launch intent for ${context.packageName}")
+            return
+        }
+        intent.addFlags(
+            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+        )
+        context.startActivity(intent)
+        device.waitForIdle(config.defaultTimeout)
+        Thread.sleep(500) // let Compose semantics settle
     }
 
     // MARK: - Results Output

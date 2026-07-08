@@ -204,6 +204,29 @@ Button(
 - Kotlin 1.9+
 - AndroidX Test libraries
 
+## API mocks
+
+Run against the JsonUI mock server (`jsonui-test mock serve`) to test empty/error
+states deterministically:
+
+```kotlin
+val config = TestRunnerConfig(
+    mockServerUrl = "http://10.0.2.2:8790", // host machine from the emulator
+    mockToken = System.getenv("JSONUI_MOCK_TOKEN")
+)
+```
+
+- A screen test's root `mocks` is applied and the app relaunched before the cases
+  run (per-file scenario selection; split normal/empty/error into separate files).
+- A `setMocks` step switches scenarios mid-flow; the next navigation re-fetches.
+- Scenarios reset to `default` at the end of each run.
+
+**Cleartext HTTP:** the emulator reaches the host at `10.0.2.2` over plain HTTP.
+Allow it **in the test build only** — add `android:usesCleartextTraffic="true"`
+(or a `network-security-config` permitting `10.0.2.2`) to the debug/androidTest
+manifest, so both the app under test and the instrumentation can reach the mock
+server. Do not ship this in release.
+
 ## License
 
 MIT License

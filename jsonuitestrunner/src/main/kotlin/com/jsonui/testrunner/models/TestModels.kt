@@ -13,6 +13,8 @@ data class ScreenTest(
     val metadata: TestMetadata,
     val platform: PlatformTarget? = null,
     val launch: LaunchConfig? = null,
+    /** API mock scenario set applied (and the app relaunched) before the cases run */
+    val mocks: Map<String, String>? = null,
     val initialState: InitialState? = null,
     val setup: List<TestStep>? = null,
     val teardown: List<TestStep>? = null,
@@ -114,6 +116,8 @@ data class FlowTestStep(
     val paths: List<String>? = null,
     val cropId: String? = null,
     val threshold: Double? = null,
+    /** Scenario map for the setMocks action (operationId -> scenario) */
+    val mocks: Map<String, String>? = null,
     @SerialName("when")
     val whenCondition: StepCondition? = null,
     val optional: Boolean? = null,
@@ -182,6 +186,8 @@ data class TestStep(
     val paths: List<String>? = null,
     val cropId: String? = null,
     val threshold: Double? = null,
+    /** Scenario map for the setMocks action (operationId -> scenario) */
+    val mocks: Map<String, String>? = null,
     @SerialName("when")
     val whenCondition: StepCondition? = null,
     val optional: Boolean? = null
