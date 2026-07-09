@@ -192,10 +192,19 @@ class ActionExecutor(
         val id = step.id ?: throw IllegalArgumentException("scroll requires 'id'")
         val direction = step.direction ?: throw IllegalArgumentException("scroll requires 'direction'")
 
-        waitForElement(id, timeout)
-
-        val (startX, startY, endX, endY) = getSwipeCoordinates(direction)
-        device.swipe(startX, startY, endX, endY, 20)
+        // Scroll WITHIN the target element's bounds (parity with `swipe` /
+        // `scrollUntilVisible` and with iOS, which scrolls the element's frame),
+        // not at fixed screen center. The `id` locates *where* to scroll, not
+        // merely that it exists. Fixed screen coordinates are a last resort only
+        // when bounds are unavailable.
+        val element = waitForElement(id, timeout)
+        val bounds = element.visibleBounds
+        if (!bounds.isEmpty) {
+            scrollWithinBounds(bounds, direction)
+        } else {
+            val (startX, startY, endX, endY) = getSwipeCoordinates(direction)
+            device.swipe(startX, startY, endX, endY, 20)
+        }
     }
 
     private fun executeSwipe(step: TestStep, timeout: Long) {
@@ -479,18 +488,21 @@ class ActionExecutor(
 
         if (targetVisible()) return
 
-        // Resolve the scrollable container: explicit id, else fall back to a
-        // screen-center swipe surface.
+        // Resolve the scrollable container: explicit id, else the app-under-test
+        // window bounds so fallback swipes stay ON the app surface (a fixed
+        // screen-center swipe can drift onto the status bar / notification shade
+        // over repeated scrolls and hide the app). getSwipeCoordinates is the
+        // final fallback only when even the app bounds are unavailable.
         val containerBounds: Rect? = step.container?.let { containerId ->
             device.findObject(By.res(containerId))?.visibleBounds
-        }
+        } ?: appSurfaceBounds()
 
         val startTime = System.currentTimeMillis()
         var previousSnapshot = ""
         var unchangedCount = 0
 
         while (System.currentTimeMillis() - startTime < timeout) {
-            if (containerBounds != null) {
+            if (containerBounds != null && !containerBounds.isEmpty) {
                 scrollWithinBounds(containerBounds, direction)
             } else {
                 val (sx, sy, ex, ey) = getSwipeCoordinates(direction)
@@ -519,6 +531,16 @@ class ActionExecutor(
 
         throw AssertionError("Element '$id' did not become visible within ${timeout}ms of scrolling")
     }
+
+    /**
+     * The app-under-test window bounds. Used to keep fallback scroll gestures on
+     * the app surface instead of the raw screen center (which can drift onto the
+     * status bar / notification shade). Returns null if the window can't be found.
+     */
+    private fun appSurfaceBounds(): Rect? = runCatching {
+        val pkg = InstrumentationRegistry.getInstrumentation().targetContext.packageName
+        device.findObject(By.pkg(pkg))?.visibleBounds
+    }.getOrNull()
 
     private fun scrollWithinBounds(bounds: Rect, direction: String) {
         val cx = bounds.centerX()
