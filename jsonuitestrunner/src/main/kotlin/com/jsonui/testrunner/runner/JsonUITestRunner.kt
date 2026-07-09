@@ -182,7 +182,8 @@ class JsonUITestRunner(
             try {
                 val warnings = mutableListOf<String>()
                 executeSteps(setup, warnings)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                rethrowIfFatal(e)
                 setupError = e.message ?: e.toString()
                 log("Setup failed: $setupError")
             }
@@ -219,7 +220,8 @@ class JsonUITestRunner(
             try {
                 val warnings = mutableListOf<String>()
                 executeSteps(teardown, warnings)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                rethrowIfFatal(e)
                 log("Teardown failed: ${e.message}")
                 results.add(TestResult(
                     testName = test.metadata.name,
@@ -281,7 +283,8 @@ class JsonUITestRunner(
             // Run flow steps
             log("Running flow steps...")
             executeFlowSteps(test.steps, currentWarnings)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            rethrowIfFatal(e)
             flowError = e.message ?: e.toString()
             log("Flow test failed: $flowError")
         }
@@ -300,7 +303,8 @@ class JsonUITestRunner(
             log("Running flow teardown...")
             try {
                 executeFlowSteps(teardown, mutableListOf())
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                rethrowIfFatal(e)
                 results.add(TestResult(
                     testName = test.metadata.name,
                     caseName = "teardown",
@@ -323,6 +327,18 @@ class JsonUITestRunner(
         return suiteResult
     }
 
+    /**
+     * A test harness must *report* failures, not crash on them. Assertions throw
+     * `AssertionError`, which is a `java.lang.Error` — NOT an `Exception` — so the
+     * per-case / retry / setup / teardown catches below use `Throwable` to keep
+     * per-case isolation and result recording intact (parity with iOS, which has a
+     * single `Error` hierarchy). Only genuinely-fatal JVM errors are rethrown so we
+     * never swallow OOM / StackOverflow.
+     */
+    private fun rethrowIfFatal(t: Throwable) {
+        if (t is VirtualMachineError) throw t
+    }
+
     private fun runTestCase(testName: String, testCase: TestCase): TestResult {
         val startTime = System.currentTimeMillis()
         log("Running case: ${testCase.name}")
@@ -341,7 +357,8 @@ class JsonUITestRunner(
                 warnings = currentWarnings.toList(),
                 durationMs = System.currentTimeMillis() - startTime
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            rethrowIfFatal(e)
             log("Case ${testCase.name} failed: ${e.message}")
             if (config.screenshotOnFailure) {
                 takeScreenshot("failure_${testName}_${testCase.name}")
@@ -395,7 +412,8 @@ class JsonUITestRunner(
 
         try {
             executeStep(step, warnings)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            rethrowIfFatal(e)
             if (step.optional == true) {
                 val label = step.label ?: step.action ?: step.assert ?: "step"
                 warnings.add("optional step failed ($label): ${e.message}")
@@ -456,7 +474,7 @@ class JsonUITestRunner(
     private fun executeRetry(step: TestStep, warnings: MutableList<String>) {
         val steps = step.steps ?: emptyList()
         val maxRetries = (step.maxRetries ?: 1).coerceIn(0, 3)
-        var lastError: Exception? = null
+        var lastError: Throwable? = null
 
         for (attempt in 0..maxRetries) {
             try {
@@ -464,7 +482,8 @@ class JsonUITestRunner(
                 executeSteps(steps, attemptWarnings)
                 warnings.addAll(attemptWarnings)
                 return
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                rethrowIfFatal(e)
                 lastError = e
                 log("    Retry attempt ${attempt + 1}/${maxRetries + 1} failed")
             }
