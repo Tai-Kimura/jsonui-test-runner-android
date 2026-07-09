@@ -120,23 +120,32 @@ class AssertionExecutor(
         val element = findElement(id)
             ?: throw AssertionError("Element '$id' not found by resource-id within a step of polling")
 
-        // For Compose TextField, the text is in the child EditText element
-        val editText = element.findObject(By.clazz("android.widget.EditText"))
-        var actualText = if (editText != null) {
+        // For Compose TextField, the editable value is on an EditText-classed
+        // a11y node — either the tagged element itself or a descendant.
+        val editText = if (element.className == "android.widget.EditText") element
+            else element.findObject(By.clazz("android.widget.EditText"))
+
+        val actualText: String = if (editText != null) {
+            // Editable field: the INPUT VALUE is authoritative. An empty field
+            // reads "" — NOT its placeholder/hint (a separate decoration node).
+            // This mirrors iOS `XCUIElement.value` and is required for
+            // cross-platform parity: without it the descendant-text aggregation
+            // below would scoop up the placeholder for an empty/cleared field
+            // (test-empty-textfield-text-ios-empty-android-placeholder).
             editText.text ?: ""
         } else {
-            element.text ?: ""
-        }
-
-        // Compose controls (Button, labeled CheckBox/Radio rows, ...) expose
-        // their label on child text nodes, not on the testTag'd container,
-        // while iOS (XCUITest label) and web (textContent) include descendant
-        // text. Mirror that: aggregate descendant text when the node has none.
-        if (actualText.isEmpty()) {
-            actualText = element.findObjects(By.clazz("android.widget.TextView"))
-                .mapNotNull { it.text }
-                .filter { it.isNotEmpty() }
-                .joinToString(" ")
+            // Non-editable (Button, labeled CheckBox/Radio rows, ...) expose
+            // their label on child text nodes, not on the testTag'd container,
+            // while iOS (XCUITest label) and web (textContent) include descendant
+            // text. Mirror that: aggregate descendant text when the node has none.
+            var t = element.text ?: ""
+            if (t.isEmpty()) {
+                t = element.findObjects(By.clazz("android.widget.TextView"))
+                    .mapNotNull { it.text }
+                    .filter { it.isNotEmpty() }
+                    .joinToString(" ")
+            }
+            t
         }
 
         when {

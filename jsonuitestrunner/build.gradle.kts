@@ -61,7 +61,7 @@ mavenPublishing {
     publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
     signAllPublications()
 
-    coordinates("io.github.tai-kimura", "jsonui-test-runner-android", "1.0.1")
+    coordinates("io.github.tai-kimura", "jsonui-test-runner-android", "1.0.2")
 
     pom {
         name.set("JsonUI Test Runner (Android)")
