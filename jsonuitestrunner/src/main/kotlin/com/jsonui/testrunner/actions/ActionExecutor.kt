@@ -58,6 +58,7 @@ class ActionExecutor(
             "doubleTap" -> executeDoubleTap(step, timeout)
             "longPress" -> executeLongPress(step, timeout)
             "input" -> executeInput(step, timeout)
+            "typeText" -> executeTypeText(step)
             "clear" -> executeClear(step, timeout)
             "scroll" -> executeScroll(step, timeout)
             "scrollUntilVisible" -> executeScrollUntilVisible(step)
@@ -170,6 +171,24 @@ class ActionExecutor(
                 }
             }
         }
+    }
+
+    /**
+     * Type into whatever currently holds keyboard focus — no element id.
+     * For fields that are focused but not directly targetable: an alpha(0)
+     * Compose node is excluded from the semantics tree entirely, so By.res(id)
+     * can never match (the standard invisible code-entry TextField pattern).
+     * Focus is established app-side (auto-focus or a prior tap on a visible
+     * container); this routes the characters to the focused editable via
+     * Instrumentation key events.
+     */
+    private fun executeTypeText(step: TestStep) {
+        val value = step.value ?: throw IllegalArgumentException("typeText requires 'value'")
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        // sendStringSync must run off the main thread (it is) and synchronously
+        // injects the key events for each character into the focused window.
+        instrumentation.sendStringSync(value)
+        instrumentation.waitForIdleSync()
     }
 
     private fun executeClear(step: TestStep, timeout: Long) {
