@@ -70,6 +70,7 @@ class ActionExecutor(
             "waitForAny" -> executeWaitForAny(step, timeout)
             "wait" -> executeWait(step)
             "back" -> executeBack()
+            "hideKeyboard" -> executeHideKeyboard()
             "screenshot" -> executeScreenshot(step)
             "alertTap" -> executeAlertTap(step, timeout)
             "selectOption" -> executeSelectOption(step, timeout)
@@ -194,6 +195,26 @@ class ActionExecutor(
      * container); this routes the characters to the focused editable via
      * Instrumentation key events.
      */
+    private fun executeHideKeyboard() {
+        // No-op when no keyboard is up — the action is a precondition
+        // normalizer, not an assertion.
+        if (!isKeyboardShown()) return
+
+        // Back closes the soft keyboard when one is open (and only then —
+        // the isKeyboardShown gate keeps this from navigating back).
+        device.pressBack()
+        device.waitForIdle()
+
+        if (isKeyboardShown()) {
+            throw IllegalStateException("hideKeyboard: keyboard still visible after back press")
+        }
+    }
+
+    private fun isKeyboardShown(): Boolean {
+        val out = device.executeShellCommand("dumpsys input_method")
+        return Regex("mInputShown=true").containsMatchIn(out)
+    }
+
     private fun executeTypeText(step: TestStep) {
         val value = step.value ?: throw IllegalArgumentException("typeText requires 'value'")
         val instrumentation = InstrumentationRegistry.getInstrumentation()
