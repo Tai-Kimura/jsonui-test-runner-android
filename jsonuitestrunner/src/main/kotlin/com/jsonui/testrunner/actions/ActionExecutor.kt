@@ -748,7 +748,25 @@ class ActionExecutor(
      * Calculates the approximate position of the target text and taps there
      */
     private fun tapTextPortion(element: UiObject2, targetText: String) {
-        val fullText = element.text ?: throw IllegalArgumentException("Element has no text")
+        // Preferred: a clickable descendant hit-target carrying the range text.
+        // KotlinJsonUI PartialAttributesText (2.11.0+) emits one per clickable
+        // range, sized to the real glyph rect — exact for centered/matchParent
+        // and wrapped labels where the proportional estimate below misses
+        // (test-partialattributes-subrange-tap-misses-on-centered-matchparent-label).
+        val hitTarget = element.findObject(By.desc(targetText).clickable(true))
+            ?: element.findObject(By.text(targetText).clickable(true))
+        if (hitTarget != null) {
+            hitTarget.click()
+            return
+        }
+
+        // Fallback: proportional position (assumes left-aligned, single-line,
+        // full-width text). The text may live on a descendant TextView rather
+        // than the tagged node itself — use that node's bounds when it does.
+        val textNode = if (element.text != null) element
+            else element.findObjects(By.clazz("android.widget.TextView"))
+                .firstOrNull { it.text?.contains(targetText) == true } ?: element
+        val fullText = textNode.text ?: throw IllegalArgumentException("Element has no text")
         val startIndex = fullText.indexOf(targetText)
 
         if (startIndex == -1) {
@@ -769,7 +787,7 @@ class ActionExecutor(
         val centerRatio = (startRatio + endRatio) / 2f
 
         // Calculate the tap coordinate
-        val bounds = element.visibleBounds
+        val bounds = textNode.visibleBounds
         val tapX = bounds.left + (bounds.width() * centerRatio).toInt()
         val tapY = bounds.centerY()
 
