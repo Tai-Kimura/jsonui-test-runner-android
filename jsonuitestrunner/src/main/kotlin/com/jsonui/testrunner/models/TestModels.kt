@@ -47,6 +47,13 @@ data class TestCase(
     val description: String? = null,
     val skip: Boolean? = null,
     val platform: PlatformTarget? = null,
+    /**
+     * Case-level responsive gate (named bucket string or constraint object),
+     * evaluated against the current window size in dp — parallel to the
+     * case-level `platform` gate. Unmet → case skipped with
+     * skipReason "responsive".
+     */
+    val responsive: ResponsiveCondition? = null,
     val initialState: InitialState? = null,
     val steps: List<TestStep>,
     /** Default argument values for @{varName} substitution */
@@ -108,6 +115,8 @@ data class FlowTestStep(
     val container: String? = null,
     val variable: String? = null,
     val times: Int? = null,
+    /** Target orientation for the setOrientation action ("portrait" | "landscape") */
+    val orientation: String? = null,
     @SerialName("while")
     val whileCondition: StepCondition? = null,
     val maxRetries: Int? = null,
@@ -177,6 +186,8 @@ data class TestStep(
     val container: String? = null,
     val variable: String? = null,
     val times: Int? = null,
+    /** Target orientation for the setOrientation action ("portrait" | "landscape") */
+    val orientation: String? = null,
     @SerialName("while")
     val whileCondition: StepCondition? = null,
     val steps: List<TestStep>? = null,
@@ -201,8 +212,13 @@ data class TestStep(
 /**
  * Condition object evaluated before a step (`when`) or before each `repeat`
  * iteration (`while`). Multiple keys are ANDed.
+ *
+ * Decoded via [StepConditionSerializer] so that keys outside the known set
+ * are captured in [unknownKeys] instead of being silently dropped by
+ * `ignoreUnknownKeys` (which would make the step run-anyway). A condition
+ * with unknown keys is fail-safe UNMET → the step is skipped.
  */
-@Serializable
+@Serializable(with = StepConditionSerializer::class)
 data class StepCondition(
     /** Instant check: element is currently visible (no polling) */
     val visible: String? = null,
@@ -211,7 +227,16 @@ data class StepCondition(
     /** Current platform matches (same rules as the step-level `platform` field) */
     val platform: PlatformTarget? = null,
     /** ViewModel state matches (requires a ViewModelStateProvider) */
-    val state: StateCondition? = null
+    val state: StateCondition? = null,
+    /** Current window size matches (named bucket or constraint object, in dp) */
+    val responsive: ResponsiveCondition? = null,
+    /**
+     * Raw JSON keys outside the known set
+     * (visible|notVisible|platform|state|responsive), i.e. written against a
+     * newer schema than this driver. Non-empty → condition is treated as
+     * unmet (skip), never run-anyway, never a hard error.
+     */
+    val unknownKeys: List<String> = emptyList()
 )
 
 @Serializable
@@ -259,8 +284,13 @@ data class TestResult(
     val passed: Boolean,
     val error: String? = null,
     val durationMs: Long = 0,
-    /** True when the case was skipped (skip flag, platform mismatch, ...) */
+    /** True when the case was skipped (skip flag, platform or responsive mismatch) */
     val skipped: Boolean = false,
+    /**
+     * Why the case was skipped ("platform" | "responsive" — results.schema.json
+     * skipReason); null for plain `skip: true` skips and non-skipped results.
+     */
+    val skipReason: String? = null,
     /** Warnings recorded during the case (optional-step failures, baseline created, ...) */
     val warnings: List<String> = emptyList()
 )

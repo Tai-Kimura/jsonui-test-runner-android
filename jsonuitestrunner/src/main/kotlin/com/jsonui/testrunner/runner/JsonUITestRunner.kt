@@ -8,12 +8,16 @@ import com.jsonui.testrunner.assertions.AssertionExecutor
 import com.jsonui.testrunner.models.FlowTest
 import com.jsonui.testrunner.models.FlowTestStep
 import com.jsonui.testrunner.models.LaunchConfig
+import com.jsonui.testrunner.models.ResponsiveCondition
+import com.jsonui.testrunner.models.ResponsiveThresholds
 import com.jsonui.testrunner.models.ScreenTest
 import com.jsonui.testrunner.models.StepCondition
 import com.jsonui.testrunner.models.TestCase
 import com.jsonui.testrunner.models.TestResult
 import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.models.TestSuiteResult
+import com.jsonui.testrunner.models.WindowDimensions
+import com.jsonui.testrunner.models.matchesResponsive
 
 /**
  * Configuration for the test runner
@@ -38,7 +42,14 @@ data class TestRunnerConfig(
     /** Mock server base URL (e.g. http://10.0.2.2:8790). Required to use `mocks` / `setMocks`. */
     val mockServerUrl: String? = null,
     /** Admin token printed by `jsonui-test mock serve`. Required with mockServerUrl. */
-    val mockToken: String? = null
+    val mockToken: String? = null,
+    /**
+     * Named-bucket width thresholds (dp) for `responsive` gating. Defaults
+     * mirror the Android renderer's break rules (kjui: medium ≥ 600dp,
+     * regular ≥ 840dp). Override only for projects that also override the
+     * renderer's breakpoints; bucket names themselves are not configurable.
+     */
+    val responsive: ResponsiveThresholds = ResponsiveThresholds()
 )
 
 /** Safety cap for `repeat` with a `while` condition and no `times` */
@@ -85,6 +96,7 @@ class JsonUITestRunner(
         // capture path as failure screenshots.
         screenshotHandler = { name -> takeScreenshot(name) }
         variableStore = variables
+        warningHandler = { message -> currentWarnings.add(message) }
     }
     private val assertionExecutor = AssertionExecutor(device, config.defaultTimeout).apply {
         baselineDir = config.baselineDir
@@ -144,15 +156,28 @@ class JsonUITestRunner(
             log("Failed to dump hierarchy: ${e.message}")
         }
 
-        // Check platform compatibility
+        // Check platform compatibility. Emit a skipped row per case (not
+        // results: []) so file-level skips stay visible in the report —
+        // "no silent truncation".
         test.platform?.let { platform ->
             if (!platform.includes(config.platform)) {
                 log("Skipping test - platform mismatch")
-                return TestSuiteResult(
+                val suiteResult = TestSuiteResult(
                     suiteName = test.metadata.name,
-                    results = emptyList(),
+                    results = test.cases.map { testCase ->
+                        TestResult(
+                            testName = test.metadata.name,
+                            caseName = testCase.name,
+                            passed = true,
+                            skipped = true,
+                            skipReason = "platform",
+                            durationMs = 0
+                        )
+                    },
                     totalDurationMs = 0
                 )
+                writeResultsIfNeeded(suiteResult)
+                return suiteResult
             }
         }
 
@@ -191,12 +216,25 @@ class JsonUITestRunner(
 
         // Run test cases
         for (testCase in test.cases) {
-            if (testCase.skip == true || testCase.platform?.includes(config.platform) == false) {
+            val skipFlag = testCase.skip == true
+            val platformMet = testCase.platform?.includes(config.platform) != false
+            // The responsive gate is only resolved when the cheaper static gates
+            // pass; skip-reason precedence (platform wins when both gates are
+            // unmet) is encoded in resolveCaseSkip.
+            val responsiveMet = if (!skipFlag && platformMet) {
+                testCase.responsive?.let { currentSizeMatches(it) }
+            } else {
+                null
+            }
+            val caseSkip = resolveCaseSkip(skipFlag, platformMet, responsiveMet)
+            if (caseSkip != null) {
+                log("Skipping case ${testCase.name}${caseSkip.reason?.let { " - $it mismatch" } ?: ""}")
                 results.add(TestResult(
                     testName = test.metadata.name,
                     caseName = testCase.name,
                     passed = true,
                     skipped = true,
+                    skipReason = caseSkip.reason,
                     durationMs = 0
                 ))
                 continue
@@ -254,15 +292,25 @@ class JsonUITestRunner(
     fun runFlowTest(test: FlowTest, testPath: String = ""): TestSuiteResult {
         val startTime = System.currentTimeMillis()
 
-        // Check platform compatibility
+        // Check platform compatibility. Emit a skipped row (not results: []) so
+        // the flow-level skip stays visible in the report — "no silent truncation".
         test.platform?.let { platform ->
             if (!platform.includes(config.platform)) {
                 log("Skipping flow test - platform mismatch")
-                return TestSuiteResult(
+                val suiteResult = TestSuiteResult(
                     suiteName = test.metadata.name,
-                    results = emptyList(),
+                    results = listOf(TestResult(
+                        testName = test.metadata.name,
+                        caseName = "flow",
+                        passed = true,
+                        skipped = true,
+                        skipReason = "platform",
+                        durationMs = 0
+                    )),
                     totalDurationMs = 0
                 )
+                writeResultsIfNeeded(suiteResult)
+                return suiteResult
             }
         }
 
@@ -404,7 +452,7 @@ class JsonUITestRunner(
 
         // Evaluate `when` pre-condition
         step.whenCondition?.let { condition ->
-            if (!evaluateCondition(condition)) {
+            if (!evaluateCondition(condition, warnings)) {
                 log("    Skipped (when not satisfied): ${step.label ?: stepDescription(step)}")
                 return
             }
@@ -450,7 +498,7 @@ class JsonUITestRunner(
 
         if (times != null && whileCondition != null) {
             for (i in 0 until times) {
-                if (!evaluateCondition(whileCondition)) return
+                if (!evaluateCondition(whileCondition, warnings)) return
                 executeSteps(steps, warnings)
             }
             return
@@ -462,10 +510,10 @@ class JsonUITestRunner(
         // while only: safety cap
         if (whileCondition != null) {
             for (i in 0 until REPEAT_WHILE_CAP) {
-                if (!evaluateCondition(whileCondition)) return
+                if (!evaluateCondition(whileCondition, warnings)) return
                 executeSteps(steps, warnings)
             }
-            if (evaluateCondition(whileCondition)) {
+            if (evaluateCondition(whileCondition, warnings)) {
                 throw AssertionError("repeat exceeded $REPEAT_WHILE_CAP iterations (possible infinite loop)")
             }
         }
@@ -493,9 +541,22 @@ class JsonUITestRunner(
 
     /**
      * Evaluate a `when` / `while` condition. Multiple keys are ANDed.
+     *
+     * Fail-safe: a condition containing keys this driver cannot evaluate
+     * (captured at decode time in [StepCondition.unknownKeys], i.e. written
+     * against a newer schema than this driver) is UNMET — the guarded step is
+     * skipped, never run-anyway, never a hard error.
      */
-    private fun evaluateCondition(condition: StepCondition): Boolean {
+    private fun evaluateCondition(condition: StepCondition, warnings: MutableList<String>): Boolean {
+        if (condition.unknownKeys.isNotEmpty()) {
+            val message = "condition key(s) [${condition.unknownKeys.joinToString(", ")}] " +
+                "not supported by this driver - condition treated as unmet (fail-safe skip)"
+            log("    Warning: $message")
+            if (message !in warnings) warnings.add(message)
+            return false
+        }
         condition.platform?.let { if (!it.includes(config.platform)) return false }
+        condition.responsive?.let { if (!currentSizeMatches(it)) return false }
         condition.visible?.let { if (device.findObject(By.res(it)) == null) return false }
         condition.notVisible?.let { if (device.findObject(By.res(it)) != null) return false }
         condition.state?.let {
@@ -504,10 +565,50 @@ class JsonUITestRunner(
         return true
     }
 
+    // MARK: - Responsive Resolution
+
+    /**
+     * True when the current window size satisfies a `responsive` condition.
+     * The live size is read on every evaluation so a mid-test `setOrientation`
+     * (or a multi-window resize) is picked up immediately.
+     */
+    private fun currentSizeMatches(condition: ResponsiveCondition): Boolean {
+        val size = currentWindowSizeDp()
+        val matched = matchesResponsive(condition, size, config.responsive)
+        log("    responsive gate: window=${size.width}x${size.height}dp -> ${if (matched) "met" else "unmet"} ($condition)")
+        return matched
+    }
+
+    /**
+     * Current app-window size in dp — the `LocalWindowInfo.containerSize`
+     * equivalent the Android renderer (kjui compose codegen) resolves
+     * responsive layout from. Derived from the ACTUAL window the app occupies:
+     * the app package's root-window bounds in the accessibility tree
+     * (px ÷ density, truncated like the renderer's `toDp().value.toInt()`),
+     * so the driver agrees with the renderer in multi-window / foldable
+     * postures. Deliberately NOT `resources.configuration.screenWidthDp`,
+     * which kjui migrated off as deprecated and which disagrees with the
+     * window near the 600/840dp boundaries in multi-window. Falls back to the
+     * full display size when the app window cannot be located.
+     */
+    private fun currentWindowSizeDp(): WindowDimensions {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val density = context.resources.displayMetrics.density
+        val bounds = runCatching {
+            device.findObject(By.pkg(context.packageName))?.visibleBounds
+        }.getOrNull()
+        val (widthPx, heightPx) = if (bounds != null && !bounds.isEmpty) {
+            bounds.width() to bounds.height()
+        } else {
+            device.displayWidth to device.displayHeight
+        }
+        return WindowDimensions((widthPx / density).toInt(), (heightPx / density).toInt())
+    }
+
     private fun executeFlowStep(step: FlowTestStep, warnings: MutableList<String>) {
         // Step-level `when` for file / block / inline steps
         step.whenCondition?.let { condition ->
-            if (!evaluateCondition(condition)) {
+            if (!evaluateCondition(condition, warnings)) {
                 log("    Skipped flow step (when not satisfied)")
                 return
             }
@@ -552,9 +653,17 @@ class JsonUITestRunner(
                 continue
             }
 
-            // Check platform compatibility
+            // Check platform compatibility (before responsive — same precedence
+            // as the screen-case filter)
             if (testCase.platform?.includes(config.platform) == false) {
                 log("    Skipping case ${testCase.name} - platform mismatch")
+                continue
+            }
+
+            // Check responsive compatibility against the current window size
+            val responsiveGate = testCase.responsive
+            if (responsiveGate != null && !currentSizeMatches(responsiveGate)) {
+                log("    Skipping case ${testCase.name} - responsive mismatch")
                 continue
             }
 
@@ -587,6 +696,7 @@ class JsonUITestRunner(
         container = container,
         variable = variable,
         times = times,
+        orientation = orientation,
         whileCondition = whileCondition,
         steps = steps?.map { it.toTestStep() },
         maxRetries = maxRetries,

@@ -48,6 +48,9 @@ object ResultsWriter {
                             else -> "failed"
                         })
                         result.error?.let { put("error", it) }
+                        // Distinct gate-skip reasons (platform vs responsive) keep
+                        // responsive tests from becoming write-only green skips.
+                        result.skipReason?.let { put("skipReason", it) }
                         if (result.warnings.isNotEmpty()) {
                             put("warnings", buildJsonArray {
                                 for (warning in result.warnings) add(JsonPrimitive(warning))

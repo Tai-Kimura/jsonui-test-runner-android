@@ -38,6 +38,9 @@ class ActionExecutor(
      */
     var variableStore: MutableMap<String, String>? = null
 
+    /** Sink for non-fatal warnings (e.g. no-op action stubs), set by the runner */
+    var warningHandler: ((String) -> Unit)? = null
+
     /**
      * Directory for resolving relative `addMedia` paths. Defaults to the
      * instrumented app's external files dir (falling back to filesDir).
@@ -75,6 +78,15 @@ class ActionExecutor(
             "readText" -> executeReadText(step, timeout)
             "setLocation" -> executeSetLocation(step)
             "addMedia" -> executeAddMedia(step)
+            // setViewport is web-only by design (an Android window cannot be
+            // freely resized), so it is permanently a no-op+warn here; width-
+            // dependent asserts must self-gate with a matching `when.responsive`
+            // (evaluated against the device's fixed size).
+            "setViewport" -> executeNoOpStub(
+                "setViewport",
+                "the viewport cannot be resized on Android; dependent asserts should self-gate with when.responsive"
+            )
+            "setOrientation" -> executeSetOrientation(step)
             else -> throw IllegalArgumentException("Unknown action: $action")
         }
     }
@@ -654,6 +666,40 @@ class ActionExecutor(
                 file.inputStream().use { it.copyTo(out) }
             } ?: throw AssertionError("addMedia could not open output stream for ${file.name}")
         }
+    }
+
+    /**
+     * Rotate the device: landscape → setOrientationLeft, portrait →
+     * setOrientationNatural. Assumes a portrait-natural device (phones /
+     * portrait-default emulators); on a landscape-natural tablet "portrait"
+     * restores the natural — landscape — orientation instead. Waits for idle
+     * (plus a short settle) so the rotated layout is stable before the next
+     * step; responsive conditions re-read the live window size afterwards, so
+     * `landscape` / `*-landscape` buckets become exercisable.
+     */
+    private fun executeSetOrientation(step: TestStep) {
+        val orientation = step.orientation
+            ?: throw IllegalArgumentException("setOrientation requires 'orientation'")
+        when (orientation) {
+            "landscape" -> device.setOrientationLeft()
+            "portrait" -> device.setOrientationNatural()
+            else -> throw IllegalArgumentException(
+                "Invalid orientation: $orientation (expected 'portrait' or 'landscape')"
+            )
+        }
+        device.waitForIdle(defaultTimeout)
+        Thread.sleep(500) // rotation animation + Compose semantics settle
+    }
+
+    /**
+     * No-op stub for actions this driver deliberately does not (yet) execute.
+     * Warns through the runner's warning sink (surfaces in TestResult.warnings)
+     * and on stdout, mirroring the AssertionExecutor convention.
+     */
+    private fun executeNoOpStub(action: String, reason: String) {
+        val message = "'$action' is a no-op on this driver: $reason"
+        println("[ActionExecutor] Warning: $message")
+        warningHandler?.invoke(message)
     }
 
     // Helper functions
