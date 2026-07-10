@@ -197,10 +197,21 @@ class ActionExecutor(
     private fun executeTypeText(step: TestStep) {
         val value = step.value ?: throw IllegalArgumentException("typeText requires 'value'")
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        // Type CHARACTER BY CHARACTER, settling between keys. A whole-string
+        // sendStringSync burst corrupts Compose fields with a reactive two-way
+        // text binding (kjui generates one per TextField: a LaunchedEffect
+        // rewrites the field from the model on every change) — mid-burst the
+        // field and model are transiently out of sync and the rewrite clobbers
+        // characters that have not propagated yet, dropping/reordering input
+        // (test-android-typetext-burst-injection-corrupts-reactive-textfield).
+        // Espresso's typeText paces per character for the same reason.
         // sendStringSync must run off the main thread (it is) and synchronously
-        // injects the key events for each character into the focused window.
-        instrumentation.sendStringSync(value)
-        instrumentation.waitForIdleSync()
+        // injects the key events into the focused window.
+        for (ch in value) {
+            instrumentation.sendStringSync(ch.toString())
+            instrumentation.waitForIdleSync()
+            Thread.sleep(TYPE_CHAR_DELAY_MS)
+        }
     }
 
     private fun executeClear(step: TestStep, timeout: Long) {
@@ -793,5 +804,15 @@ class ActionExecutor(
 
         // Tap at the calculated position
         device.click(tapX, tapY)
+    }
+
+    companion object {
+        /**
+         * Inter-character settle for typeText. waitForIdleSync alone covers
+         * recomposition; the extra margin lets the field->model->field
+         * round-trip of a reactive two-way binding converge before the next
+         * key event.
+         */
+        private const val TYPE_CHAR_DELAY_MS = 50L
     }
 }
