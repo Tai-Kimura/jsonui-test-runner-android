@@ -344,14 +344,18 @@ class ActionExecutor(
         val startTime = System.currentTimeMillis()
 
         while (System.currentTimeMillis() - startTime < timeout) {
-            // Try to find button by text in any dialog
-            val button = device.findObject(By.text(buttonText))
-            if (button != null) {
-                button.click()
+            // Prefer a CLICKABLE node with the label. A bare By.text match
+            // walks the hierarchy depth-first and hits a dialog *title* that
+            // shares the button's text (title "Sign Out" + button "Sign Out")
+            // before the button — the click is a no-op and the dialog stays
+            // open. iOS parity: its alertTap only queries .buttons[label].
+            val clickableButton = device.findObject(By.text(buttonText).clickable(true))
+            if (clickableButton != null) {
+                clickableButton.click()
                 return
             }
 
-            // Try standard Android dialog button IDs
+            // Try standard Android dialog button IDs (View-based AlertDialog)
             val positiveButton = device.findObject(By.res("android:id/button1"))
             if (positiveButton != null && positiveButton.text == buttonText) {
                 positiveButton.click()
@@ -371,6 +375,16 @@ class ActionExecutor(
             }
 
             Thread.sleep(100)
+        }
+
+        // Legacy fallback: some custom dialogs expose a tappable label without
+        // the clickable flag. Only try the bare text match AFTER the clickable/
+        // res-id poll expires — inside the loop it would hit the title first
+        // on the very first pass, which is exactly the bug.
+        val fallback = device.findObject(By.text(buttonText))
+        if (fallback != null) {
+            fallback.click()
+            return
         }
 
         throw AssertionError("Alert button '$buttonText' not found within ${timeout}ms")
