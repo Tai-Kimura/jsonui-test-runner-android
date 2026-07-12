@@ -70,6 +70,10 @@ data class FlowTest(
     val platform: PlatformTarget? = null,
     val launch: LaunchConfig? = null,
     val initialState: FlowInitialState? = null,
+    // File-level mock scenarios (operationId -> scenario) applied before the
+    // first launch, so startup fetches run under the selected scenarios.
+    // Parity with ScreenTest.mocks; step-level setMocks handles mid-flow switches.
+    val mocks: Map<String, String>? = null,
     val setup: List<FlowTestStep>? = null,
     val teardown: List<FlowTestStep>? = null,
     val steps: List<FlowTestStep>,
