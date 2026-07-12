@@ -314,6 +314,22 @@ class JsonUITestRunner(
             }
         }
 
+        // Apply the file-level mock scenario set BEFORE the app fetches, then
+        // relaunch so the flow starts under the selected scenarios. Parity with
+        // runScreenTest (§8.1); a failure here fails the flow rather than
+        // silently running the default scenario.
+        test.mocks?.let { mocks ->
+            try {
+                requireMockClient("mocks").scenarioSet(mocks)
+                relaunchApp()
+            } catch (e: Exception) {
+                val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, durationMs = 0))
+                val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
+                writeResultsIfNeeded(suiteResult)
+                return suiteResult
+            }
+        }
+
         // Apply launch configuration before running
         test.launch?.let { applyLaunch(it) }
 
