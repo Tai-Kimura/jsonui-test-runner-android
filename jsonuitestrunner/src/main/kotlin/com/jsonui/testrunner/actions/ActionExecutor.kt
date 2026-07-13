@@ -87,6 +87,14 @@ class ActionExecutor(
                 "setViewport",
                 "the viewport cannot be resized on Android; dependent asserts should self-gate with when.responsive"
             )
+            // emitHook drives a browser-side hook (window.__jsonuiTestHooks);
+            // there is no equivalent injection channel into a native app, so it
+            // is permanently a no-op+warn here. Gate dependent steps/asserts
+            // with when.platform: web.
+            "emitHook" -> executeNoOpStub(
+                "emitHook",
+                "browser-side hooks do not exist on Android; gate dependent steps with when.platform"
+            )
             "setOrientation" -> executeSetOrientation(step)
             else -> throw IllegalArgumentException("Unknown action: $action")
         }
