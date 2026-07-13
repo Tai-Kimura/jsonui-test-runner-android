@@ -349,9 +349,27 @@ class ActionExecutor(
             // shares the button's text (title "Sign Out" + button "Sign Out")
             // before the button — the click is a no-op and the dialog stays
             // open. iOS parity: its alertTap only queries .buttons[label].
+            //
+            // Same-node constraint (View Button: text lives on the clickable
+            // node itself).
             val clickableButton = device.findObject(By.text(buttonText).clickable(true))
             if (clickableButton != null) {
                 clickableButton.click()
+                return
+            }
+
+            // Compose TextButton: in the accessibility tree UiAutomator sees,
+            // the clickable node and the Text are SEPARATE nodes (semantics
+            // merging is TalkBack semantics — text+clickable never co-occur on
+            // one node here), so the same-node query above matches nothing.
+            // Match a clickable whose shallow descendant carries the label;
+            // maxDepth keeps a big clickable container with the title deep
+            // inside from stealing the match.
+            val composeButton = device.findObject(
+                By.clickable(true).hasDescendant(By.text(buttonText), 3)
+            )
+            if (composeButton != null) {
+                composeButton.click()
                 return
             }
 
