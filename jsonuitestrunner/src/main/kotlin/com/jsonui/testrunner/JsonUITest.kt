@@ -83,10 +83,19 @@ object JsonUITest {
         private var defaultTimeout: Long = 5000L
         private var screenshotOnFailure: Boolean = true
         private var verbose: Boolean = false
+        private var screenshotDir: java.io.File? = null
+        private var record: Boolean = false
+        private var keepRecordingOnSuccess: Boolean = false
 
         fun defaultTimeout(timeout: Long) = apply { this.defaultTimeout = timeout }
         fun screenshotOnFailure(enabled: Boolean) = apply { this.screenshotOnFailure = enabled }
         fun verbose(enabled: Boolean) = apply { this.verbose = enabled }
+        /** Artifact root override (default: external files dir /jsonui-artifacts) */
+        fun screenshotDir(dir: java.io.File?) = apply { this.screenshotDir = dir }
+        /** Record the screen per case as <root>/<test>/<case>/recording.mp4 */
+        fun record(enabled: Boolean) = apply { this.record = enabled }
+        /** Keep recordings of passing cases too (default: failures only) */
+        fun keepRecordingOnSuccess(enabled: Boolean) = apply { this.keepRecordingOnSuccess = enabled }
 
         fun build(): JsonUITestRunner {
             return JsonUITestRunner(
@@ -94,7 +103,10 @@ object JsonUITest {
                     defaultTimeout = defaultTimeout,
                     screenshotOnFailure = screenshotOnFailure,
                     platform = "android",
-                    verbose = verbose
+                    verbose = verbose,
+                    screenshotDir = screenshotDir,
+                    record = record,
+                    keepRecordingOnSuccess = keepRecordingOnSuccess
                 )
             )
         }
