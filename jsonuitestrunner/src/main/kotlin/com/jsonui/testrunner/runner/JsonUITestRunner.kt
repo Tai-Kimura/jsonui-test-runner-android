@@ -28,11 +28,20 @@ data class TestRunnerConfig(
     val platform: String = "android",
     val verbose: Boolean = false,
     /**
-     * Directory where screenshots (both `screenshot` action steps and
-     * failure screenshots) are saved. Defaults to the instrumented app's
-     * filesDir when null.
+     * Root directory for test artifacts (both `screenshot` action steps and
+     * failure screenshots, plus recordings). Defaults to
+     * `<external files dir>/jsonui-artifacts` when null — an adb-pullable
+     * location (`jsonui-test artifacts pull` collects it without run-as).
+     * Artifacts are structured `<root>/<testName>/<caseName>/<file>`.
      */
     val screenshotDir: java.io.File? = null,
+    /**
+     * Record the screen per test case (per flow for flow tests) via the
+     * platform `screenrecord`, saved as `<root>/<test>/<case>/recording.mp4`.
+     */
+    val record: Boolean = false,
+    /** Keep recordings of passing cases too (default: only failures survive). */
+    val keepRecordingOnSuccess: Boolean = false,
     /** Baseline directory for the `screenshot` assertion (default: external files dir) */
     val baselineDir: java.io.File? = null,
     /** When true, screenshot baselines are always overwritten and the assertion passes */
@@ -83,6 +92,19 @@ class JsonUITestRunner(
 
     /** Warnings collected during the current case (drained per-case) */
     private var currentWarnings = mutableListOf<String>()
+
+    /**
+     * Identity of the test file / case currently executing — artifacts are
+     * saved under `<root>/<testName>/<caseName>/` (parity with iOS attachment
+     * naming), so `jsonui-test artifacts pull` gets the tree pre-organized.
+     */
+    private var currentTestName = ""
+    private var currentCaseName = ""
+
+    /** Per-case screen recorder (config.record); shell-uid `screenrecord`. */
+    private val screenRecorder by lazy {
+        ScreenRecorder(InstrumentationRegistry.getInstrumentation().uiAutomation)
+    }
 
     /** State provider for `state` assertions/conditions; inject before running. */
     var stateProvider: ViewModelStateProvider? = null
@@ -201,6 +223,11 @@ class JsonUITestRunner(
 
         // Run setup once. If it throws, every case is recorded as failed but
         // teardown still runs (§7 teardown guarantee).
+        // Artifact identity for this file (setup/teardown captures carry the
+        // phase name until runTestCase overwrites the case name).
+        currentTestName = test.metadata.name
+        currentCaseName = "setup"
+
         var setupError: String? = null
         test.setup?.let { setup ->
             log("Running setup...")
@@ -255,6 +282,7 @@ class JsonUITestRunner(
         // Teardown (guaranteed). A teardown failure is recorded as an extra failed result.
         test.teardown?.let { teardown ->
             log("Running teardown...")
+            currentCaseName = "teardown"
             try {
                 val warnings = mutableListOf<String>()
                 executeSteps(teardown, warnings)
@@ -337,6 +365,11 @@ class JsonUITestRunner(
         currentWarnings = mutableListOf()
         var flowError: String? = null
 
+        // A flow acts as a single case for artifact identity purposes.
+        currentTestName = test.metadata.name
+        currentCaseName = "flow"
+        startCaseRecording(test.metadata.name, "flow")
+
         try {
             // Run setup
             test.setup?.let { setup ->
@@ -347,10 +380,17 @@ class JsonUITestRunner(
             // Run flow steps
             log("Running flow steps...")
             executeFlowSteps(test.steps, currentWarnings)
+            finishCaseRecording(passed = true)
         } catch (e: Throwable) {
             rethrowIfFatal(e)
             flowError = e.message ?: e.toString()
             log("Flow test failed: $flowError")
+            finishCaseRecording(passed = false)
+            // Parity with screen-test cases (and iOS/web flows): capture the
+            // failure moment — flows previously took no failure screenshot.
+            if (config.screenshotOnFailure) {
+                takeScreenshot("failure")
+            }
         }
 
         results.add(TestResult(
@@ -407,13 +447,17 @@ class JsonUITestRunner(
         val startTime = System.currentTimeMillis()
         log("Running case: ${testCase.name}")
         currentWarnings = mutableListOf()
+        currentTestName = testName
+        currentCaseName = testCase.name
 
         // Apply load-time args substitution if test case has args
         val processedCase = testLoader?.applyArgsSubstitution(testCase)
             ?: applyArgsSubstitutionLocally(testCase)
 
+        startCaseRecording(testName, testCase.name)
         return try {
             executeSteps(processedCase.steps, currentWarnings)
+            finishCaseRecording(passed = true)
             TestResult(
                 testName = testName,
                 caseName = testCase.name,
@@ -424,8 +468,9 @@ class JsonUITestRunner(
         } catch (e: Throwable) {
             rethrowIfFatal(e)
             log("Case ${testCase.name} failed: ${e.message}")
+            finishCaseRecording(passed = false)
             if (config.screenshotOnFailure) {
-                takeScreenshot("failure_${testName}_${testCase.name}")
+                takeScreenshot("failure")
             }
             TestResult(
                 testName = testName,
@@ -800,16 +845,61 @@ class JsonUITestRunner(
         }
     }
 
+    /**
+     * Root for on-device artifacts. Default is the app's EXTERNAL files dir
+     * (`/sdcard/Android/data/<pkg>/files/jsonui-artifacts`) — pullable via
+     * plain `adb pull`, no run-as (the old filesDir default needed run-as,
+     * which is flaky). Falls back to filesDir only when external storage is
+     * unavailable.
+     */
+    private fun artifactsRoot(): java.io.File {
+        config.screenshotDir?.let { return it }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val base = context.getExternalFilesDir(null) ?: context.filesDir
+        return java.io.File(base, "jsonui-artifacts")
+    }
+
     private fun takeScreenshot(name: String) {
         try {
-            val dir = config.screenshotDir
-                ?: InstrumentationRegistry.getInstrumentation().targetContext.filesDir
-            dir.mkdirs()
-            val file = java.io.File(dir, "$name.png")
+            val file = ArtifactPaths.screenshotFile(
+                artifactsRoot(), currentTestName, currentCaseName, name
+            )
+            file.parentFile?.mkdirs()
             device.takeScreenshot(file)
             log("Screenshot saved: ${file.absolutePath}")
         } catch (e: Exception) {
             log("Failed to take screenshot: ${e.message}")
+        }
+    }
+
+    /** Start the per-case recording; failures are logged, never thrown. */
+    private fun startCaseRecording(testName: String, caseName: String) {
+        if (!config.record) return
+        try {
+            screenRecorder.start(
+                ArtifactPaths.recordingFile(artifactsRoot(), testName, caseName)
+            )
+        } catch (e: Exception) {
+            log("Failed to start recording: ${e.message}")
+        }
+    }
+
+    /**
+     * Stop the per-case recording. Passing cases discard the file unless
+     * keepRecordingOnSuccess; failing cases always keep it. No-op when no
+     * recording is running.
+     */
+    private fun finishCaseRecording(passed: Boolean) {
+        if (!screenRecorder.isRecording) return
+        try {
+            val file = screenRecorder.stop()
+            when {
+                file == null -> log("Recording did not finalize in time")
+                passed && !config.keepRecordingOnSuccess -> screenRecorder.discard(file)
+                else -> log("Recording saved: ${file.absolutePath}")
+            }
+        } catch (e: Exception) {
+            log("Failed to stop recording: ${e.message}")
         }
     }
 
