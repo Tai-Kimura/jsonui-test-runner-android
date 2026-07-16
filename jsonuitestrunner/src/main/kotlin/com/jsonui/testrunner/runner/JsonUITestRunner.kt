@@ -304,6 +304,9 @@ class JsonUITestRunner(
             runCatching { mockClient?.reset() }
         }
 
+        // Survive the connectedAndroidTest post-run uninstall (see the method doc).
+        mirrorArtifactsForPull(test.metadata.name)
+
         val totalDuration = System.currentTimeMillis() - startTime
         val suiteResult = TestSuiteResult(
             suiteName = test.metadata.name,
@@ -421,6 +424,9 @@ class JsonUITestRunner(
 
         // Reset mock scenarios so a flow's setMocks state does not leak to the next test.
         runCatching { mockClient?.reset() }
+
+        // Survive the connectedAndroidTest post-run uninstall (see the method doc).
+        mirrorArtifactsForPull(test.metadata.name)
 
         val suiteResult = TestSuiteResult(
             suiteName = test.metadata.name,
@@ -869,6 +875,40 @@ class JsonUITestRunner(
             log("Screenshot saved: ${file.absolutePath}")
         } catch (e: Exception) {
             log("Failed to take screenshot: ${e.message}")
+        }
+    }
+
+    /**
+     * Mirror this suite's artifacts to /data/local/tmp so they survive the
+     * post-run APK uninstall.
+     *
+     * Gradle connectedAndroidTest uninstalls the app+test APKs when the run
+     * finishes, and the OS deletes the app-specific external dir (the default
+     * artifacts root) with it — `jsonui-test artifacts pull` would find
+     * nothing. /data/local/tmp is shell-owned and survives uninstall; the CLI
+     * already collects it as a fallback root and merges both trees.
+     *
+     * Skipped when config.screenshotDir is set (a custom root is
+     * consumer-managed and may not be shell-readable). Per-suite exact mirror
+     * (rm + cp of this suite's subtree) so a re-run of the same suite never
+     * mixes stale files; unrelated suites from previous runs are left alone —
+     * use `jsonui-test artifacts pull --clean` to clear the device between
+     * runs when that matters.
+     */
+    private fun mirrorArtifactsForPull(testName: String) {
+        if (config.screenshotDir != null) return
+        val suite = ArtifactPaths.sanitize(testName)
+        val src = java.io.File(artifactsRoot(), suite)
+        if (!src.exists()) return
+        try {
+            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            val dstRoot = "/data/local/tmp/jsonui-artifacts"
+            Shell.exec(automation, "rm -rf $dstRoot/$suite")
+            Shell.exec(automation, "mkdir -p $dstRoot")
+            Shell.exec(automation, "cp -r ${src.absolutePath} $dstRoot/")
+            log("Artifacts mirrored for pull: $dstRoot/$suite")
+        } catch (e: Exception) {
+            log("Failed to mirror artifacts: ${e.message}")
         }
     }
 
