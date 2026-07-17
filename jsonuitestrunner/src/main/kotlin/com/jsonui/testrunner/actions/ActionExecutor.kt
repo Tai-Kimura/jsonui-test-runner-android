@@ -649,6 +649,7 @@ class ActionExecutor(
                     nudgeBackward(containerBounds, direction)
                     device.waitForIdle(1000)
                     if (device.wait(Until.hasObject(By.res(id)), 1500)) return
+                    if (recoverFrozenSemantics(id, containerBounds, direction)) return
                     throw AssertionError("Element '$id' not found after scrolling to the end")
                 }
             } else {
@@ -698,6 +699,55 @@ class ActionExecutor(
             "left" -> device.swipe(cx + d, cy, cx - d, cy, 40)
             "right" -> device.swipe(cx - d, cy, cx + d, cy, 40)
         }
+    }
+
+    /**
+     * Frozen-semantics recovery. On complex Compose pages a visibility
+     * collapse shortly after entry can leave the app-side accessibility
+     * provider serving a stale, viewport-clipped snapshot: rendering and
+     * scrolling stay correct, but nodes keep pre-collapse coordinates and
+     * content below the stale viewport (the scroll target included) never
+     * enters the tree — even though a11y events keep flowing. Measured on a
+     * real page: dumps stay byte-identical across time, and
+     * UiAutomation.clearCache() alone right after failure still misses the
+     * target, but a pair of full-step bidirectional swipes followed by
+     * clearCache + a serviceInfo resync brings the live tree back.
+     *
+     * This runs ONLY on the failure path (end of scroll, target still
+     * missing), so healthy pages never pay for it. Returns true when the
+     * target appeared after a recovery round.
+     */
+    private fun recoverFrozenSemantics(id: String, bounds: Rect?, direction: String): Boolean {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val b = bounds ?: appSurfaceBounds() ?: return false
+        val cx = b.centerX()
+        val cy = b.centerY()
+        val d = (b.height() * 0.25).toInt().coerceAtLeast(120)
+        repeat(2) {
+            // Net-zero bidirectional swipe: forces real scroll traffic (and the
+            // layout passes that come with it) without losing the end position.
+            when (direction) {
+                "up", "down" -> {
+                    device.swipe(cx, cy - d, cx, cy + d, 20)
+                    device.waitForIdle(1000)
+                    device.swipe(cx, cy + d, cx, cy - d, 20)
+                }
+                else -> {
+                    device.swipe(cx - d, cy, cx + d, cy, 20)
+                    device.waitForIdle(1000)
+                    device.swipe(cx + d, cy, cx - d, cy, 20)
+                }
+            }
+            device.waitForIdle(1000)
+            // Drop the UiAutomation-side node cache (API 34+; older APIs skip)
+            // and resync the a11y service state, then look again.
+            runCatching {
+                android.app.UiAutomation::class.java.getMethod("clearCache").invoke(automation)
+            }
+            runCatching { automation.serviceInfo = automation.serviceInfo }
+            if (device.wait(Until.hasObject(By.res(id)), 2000)) return true
+        }
+        return false
     }
 
     /**
