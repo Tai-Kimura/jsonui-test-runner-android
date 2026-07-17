@@ -12,6 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
+import androidx.test.uiautomator.Until
 import com.jsonui.testrunner.models.TestStep
 import java.io.File
 
@@ -587,9 +588,7 @@ class ActionExecutor(
         val direction = step.direction ?: "down"
         val timeout = step.timeout?.toLong() ?: 20000L
 
-        fun targetVisible(): Boolean = device.findObject(By.res(id)) != null
-
-        if (targetVisible()) return
+        if (device.findObject(By.res(id)) != null) return
 
         // Resolve the scrollable container: explicit id, else the app-under-test
         // window bounds so fallback swipes stay ON the app surface (a fixed
@@ -601,7 +600,7 @@ class ActionExecutor(
         } ?: appSurfaceBounds()
 
         val startTime = System.currentTimeMillis()
-        var previousSnapshot = ""
+        var previousSnapshot: String? = null
         var unchangedCount = 0
 
         while (System.currentTimeMillis() - startTime < timeout) {
@@ -612,18 +611,32 @@ class ActionExecutor(
                 device.swipe(sx, sy, ex, ey, 20)
             }
 
-            if (targetVisible()) return
+            // Let the fling settle before looking: an immediate findObject reads
+            // the mid-scroll (or not-yet-updated) a11y tree. The bounded wait
+            // both settles and polls for the target.
+            device.waitForIdle(1000)
+            if (device.wait(Until.hasObject(By.res(id)), 800)) return
 
-            // End-reached detection: two consecutive scrolls with no change
-            val snapshot = try {
-                device.findObject(By.pkg(InstrumentationRegistry.getInstrumentation().targetContext.packageName))
-                    ?.let { obj -> obj.children.joinToString("|") { it.resourceName ?: it.text ?: "" } } ?: ""
-            } catch (e: Exception) {
-                ""
-            }
-            if (snapshot.isNotEmpty() && snapshot == previousSnapshot) {
+            // End-reached detection: two consecutive scrolls with no change.
+            // Never silently disabled — error states become distinct sentinel
+            // strings that still participate in the comparison (a persistently
+            // unreadable tree ends in the end-of-scroll diagnostic below
+            // instead of burning the full timeout).
+            val snapshot = scrollSnapshot()
+            if (previousSnapshot != null && snapshot == previousSnapshot) {
                 unchangedCount++
                 if (unchangedCount >= 1) {
+                    // End of scroll (or the a11y tree froze): a fling that lands
+                    // on the overscroll clamp can leave the Compose semantics
+                    // tree one swipe stale with no resync trigger — the target
+                    // is rendered on screen but absent from the frozen tree
+                    // (measured on a bottom-flush target: the dumped hierarchy
+                    // trailed the real scroll offset by exactly one swipe).
+                    // A small reverse drag forces a scroll event and a fresh
+                    // semantics pass before the final verdict.
+                    nudgeBackward(containerBounds, direction)
+                    device.waitForIdle(1000)
+                    if (device.wait(Until.hasObject(By.res(id)), 1500)) return
                     throw AssertionError("Element '$id' not found after scrolling to the end")
                 }
             } else {
@@ -632,7 +645,47 @@ class ActionExecutor(
             previousSnapshot = snapshot
         }
 
+        // Last look before declaring timeout — the loop may have exited right
+        // after a swipe whose settle revealed the target.
+        if (device.findObject(By.res(id)) != null) return
         throw AssertionError("Element '$id' did not become visible within ${timeout}ms of scrolling")
+    }
+
+    /**
+     * Change-detection snapshot: hash of the full window hierarchy dump, so
+     * any node's bounds/text change (i.e. actual scroll progress anywhere in
+     * the tree) reads as "changed". Shallow alternatives fail both ways:
+     * the app root's direct children are a full-screen container whose id and
+     * bounds never change while scrolling (constant snapshot → end detection
+     * fires immediately), and the pre-1.6.2 join of child ids/text was empty
+     * on Compose windows (empty snapshot → detection silently disabled and
+     * the full timeout burned). Error states return distinct sentinels that
+     * still participate in the comparison.
+     */
+    private fun scrollSnapshot(): String = runCatching {
+        val out = java.io.ByteArrayOutputStream()
+        device.dumpWindowHierarchy(out)
+        val digest = java.security.MessageDigest.getInstance("MD5").digest(out.toByteArray())
+        digest.joinToString("") { "%02x".format(it) }
+    }.getOrElse { e -> "<error:${e.javaClass.simpleName}>" }
+
+    /**
+     * Small, slow reverse drag (not a fling) — enough to force a scroll event
+     * and a fresh Compose semantics pass at the overscroll clamp without
+     * materially losing the end position.
+     */
+    private fun nudgeBackward(bounds: Rect?, direction: String) {
+        val b = bounds ?: appSurfaceBounds() ?: return
+        val cx = b.centerX()
+        val cy = b.centerY()
+        val d = 60 // px each way; slow steps make it a drag, not a fling
+        when (direction) {
+            // Opposite finger motion of scrollWithinBounds for each direction.
+            "up" -> device.swipe(cx, cy + d, cx, cy - d, 40)
+            "down" -> device.swipe(cx, cy - d, cx, cy + d, 40)
+            "left" -> device.swipe(cx + d, cy, cx - d, cy, 40)
+            "right" -> device.swipe(cx - d, cy, cx + d, cy, 40)
+        }
     }
 
     /**
