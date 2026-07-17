@@ -590,6 +590,18 @@ class ActionExecutor(
 
         if (device.findObject(By.res(id)) != null) return
 
+        // Preferred path (container given): scroll via the accessibility
+        // ACTION_SCROLL_FORWARD/BACKWARD on the container node instead of
+        // injecting gestures. The action is dispatched by node identity, not
+        // coordinates, so it still reaches the target when the semantics tree's
+        // POSITIONS are stale (measured on a consumer page: a visibility
+        // collapse while scrolled desynced a whole column's bounds
+        // permanently — gesture scrolling then never finds an on-screen
+        // element). It also scrolls in page-sized steps with no fling
+        // momentum, so the overscroll-clamp freeze cannot occur at all.
+        val deadline = System.currentTimeMillis() + timeout
+        if (semanticsScrollUntilVisible(step.container, id, direction, deadline)) return
+
         // Resolve the scrollable container: explicit id, else the app-under-test
         // window bounds so fallback swipes stay ON the app surface (a fixed
         // screen-center swipe can drift onto the status bar / notification shade
@@ -686,6 +698,66 @@ class ActionExecutor(
             "left" -> device.swipe(cx + d, cy, cx - d, cy, 40)
             "right" -> device.swipe(cx - d, cy, cx + d, cy, 40)
         }
+    }
+
+    /**
+     * Accessibility-action scrolling: repeatedly performs
+     * ACTION_SCROLL_FORWARD/BACKWARD on the container node until the target's
+     * viewId appears in a FRESH rootInActiveWindow tree (no UiObject2 caching,
+     * no coordinates). Returns false when the container is missing / not
+     * scrollable / the end is reached without finding the target — the caller
+     * falls back to gesture scrolling and its end-of-scroll diagnostics.
+     */
+    private fun semanticsScrollUntilVisible(
+        containerId: String?,
+        targetId: String,
+        direction: String,
+        deadline: Long
+    ): Boolean {
+        if (containerId == null) return false
+        val action = when (direction) {
+            "down", "right" -> android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            "up", "left" -> android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            else -> return false
+        }
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+
+        // BFS over a FRESH rootInActiveWindow comparing viewIdResourceName
+        // directly — findAccessibilityNodeInfosByViewId does NOT match
+        // Compose's raw testTag ids (measured: returns nothing for tags that
+        // By.res finds), so it would silently turn this whole path into dead
+        // code that always falls back to gestures.
+        fun findByViewId(viewId: String): android.view.accessibility.AccessibilityNodeInfo? =
+            runCatching {
+                val root = automation.rootInActiveWindow ?: return@runCatching null
+                val queue = ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
+                queue.add(root)
+                while (queue.isNotEmpty()) {
+                    val node = queue.removeFirst()
+                    if (node.viewIdResourceName == viewId) return@runCatching node
+                    for (i in 0 until node.childCount) {
+                        node.getChild(i)?.let(queue::add)
+                    }
+                }
+                null
+            }.getOrNull()
+
+        return runCatching {
+            var guard = 0
+            while (System.currentTimeMillis() < deadline && guard < 100) {
+                if (findByViewId(targetId) != null) return@runCatching true
+                val container = findByViewId(containerId) ?: return@runCatching false
+                if (!container.isScrollable) return@runCatching false
+                val moved = container.performAction(action)
+                device.waitForIdle(1000)
+                if (!moved) {
+                    // End of content (or action refused): one final fresh look.
+                    return@runCatching findByViewId(targetId) != null
+                }
+                guard++
+            }
+            findByViewId(targetId) != null
+        }.getOrDefault(false)
     }
 
     /**
