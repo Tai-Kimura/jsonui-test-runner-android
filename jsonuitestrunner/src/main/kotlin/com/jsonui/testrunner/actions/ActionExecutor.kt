@@ -590,18 +590,6 @@ class ActionExecutor(
 
         if (device.findObject(By.res(id)) != null) return
 
-        // Preferred path (container given): scroll via the accessibility
-        // ACTION_SCROLL_FORWARD/BACKWARD on the container node instead of
-        // injecting gestures. The action is dispatched by node identity, not
-        // coordinates, so it still reaches the target when the semantics tree's
-        // POSITIONS are stale (measured on a consumer page: a visibility
-        // collapse while scrolled desynced a whole column's bounds
-        // permanently — gesture scrolling then never finds an on-screen
-        // element). It also scrolls in page-sized steps with no fling
-        // momentum, so the overscroll-clamp freeze cannot occur at all.
-        val deadline = System.currentTimeMillis() + timeout
-        if (semanticsScrollUntilVisible(step.container, id, direction, deadline)) return
-
         // Resolve the scrollable container: explicit id, else the app-under-test
         // window bounds so fallback swipes stay ON the app surface (a fixed
         // screen-center swipe can drift onto the status bar / notification shade
@@ -611,11 +599,65 @@ class ActionExecutor(
             device.findObject(By.res(containerId))?.visibleBounds
         } ?: appSurfaceBounds()
 
-        val startTime = System.currentTimeMillis()
+        // `direction` is the FIRST direction to search, not a constraint: when
+        // the primary sweep reaches the end of content without a hit, the
+        // search continues from there in the OPPOSITE direction all the way to
+        // the other end. The target can legitimately sit on the far side of
+        // the starting offset — measured on a tablet 2-column page: a tall
+        // section left partially visible at the viewport top made an
+        // "scroll up until <section> visible" reset step a correct no-op, and
+        // a down-only search then ran to the bottom while the target sat just
+        // ABOVE the viewport (intermittent by a few px of scroll position).
+        if (searchInDirection(step.container, containerBounds, id, direction,
+                System.currentTimeMillis() + timeout)) return
+
+        // Reverse leg: grant it a real budget even when the primary leg burned
+        // the step timeout scrolling a long page to its end (bounded: at most
+        // one extra half-timeout).
+        val reverse = oppositeDirection(direction)
+        if (searchInDirection(step.container, containerBounds, id, reverse,
+                System.currentTimeMillis() + maxOf(timeout / 2, 6000L))) return
+
+        throw AssertionError("Element '$id' not found after scrolling to both ends")
+    }
+
+    private fun oppositeDirection(direction: String): String = when (direction) {
+        "down" -> "up"
+        "up" -> "down"
+        "left" -> "right"
+        "right" -> "left"
+        else -> "up"
+    }
+
+    /**
+     * One directional search leg: a11y-action scrolling first (container
+     * given), then gesture sweeps with end-of-content detection. Returns true
+     * when the target appeared; false when this direction is exhausted (end
+     * reached, container non-scrollable, or the leg's deadline passed) so the
+     * caller can try the opposite direction.
+     */
+    private fun searchInDirection(
+        containerId: String?,
+        containerBounds: Rect?,
+        id: String,
+        direction: String,
+        deadline: Long
+    ): Boolean {
+        // Preferred path (container given): scroll via the accessibility
+        // ACTION_SCROLL_FORWARD/BACKWARD on the container node instead of
+        // injecting gestures. The action is dispatched by node identity, not
+        // coordinates, so it still reaches the target when the semantics tree's
+        // POSITIONS are stale (measured on a consumer page: a visibility
+        // collapse while scrolled desynced a whole column's bounds
+        // permanently — gesture scrolling then never finds an on-screen
+        // element). It also scrolls in page-sized steps with no fling
+        // momentum, so the overscroll-clamp freeze cannot occur at all.
+        if (semanticsScrollUntilVisible(containerId, id, direction, deadline)) return true
+
         var previousSnapshot: String? = null
         var unchangedCount = 0
 
-        while (System.currentTimeMillis() - startTime < timeout) {
+        while (System.currentTimeMillis() < deadline) {
             if (containerBounds != null && !containerBounds.isEmpty) {
                 scrollWithinBounds(containerBounds, direction)
             } else {
@@ -627,7 +669,7 @@ class ActionExecutor(
             // the mid-scroll (or not-yet-updated) a11y tree. The bounded wait
             // both settles and polls for the target.
             device.waitForIdle(1000)
-            if (device.wait(Until.hasObject(By.res(id)), 800)) return
+            if (device.wait(Until.hasObject(By.res(id)), 800)) return true
 
             // End-reached detection: two consecutive scrolls with no change.
             // Never silently disabled — error states become distinct sentinel
@@ -645,12 +687,11 @@ class ActionExecutor(
                     // (measured on a bottom-flush target: the dumped hierarchy
                     // trailed the real scroll offset by exactly one swipe).
                     // A small reverse drag forces a scroll event and a fresh
-                    // semantics pass before the final verdict.
+                    // semantics pass before this leg's verdict.
                     nudgeBackward(containerBounds, direction)
                     device.waitForIdle(1000)
-                    if (device.wait(Until.hasObject(By.res(id)), 1500)) return
-                    if (recoverFrozenSemantics(id, containerBounds, direction)) return
-                    throw AssertionError("Element '$id' not found after scrolling to the end")
+                    if (device.wait(Until.hasObject(By.res(id)), 1500)) return true
+                    return recoverFrozenSemantics(id, containerBounds, direction)
                 }
             } else {
                 unchangedCount = 0
@@ -658,10 +699,9 @@ class ActionExecutor(
             previousSnapshot = snapshot
         }
 
-        // Last look before declaring timeout — the loop may have exited right
+        // Last look before this leg gives up — the loop may have exited right
         // after a swipe whose settle revealed the target.
-        if (device.findObject(By.res(id)) != null) return
-        throw AssertionError("Element '$id' did not become visible within ${timeout}ms of scrolling")
+        return device.findObject(By.res(id)) != null
     }
 
     /**
