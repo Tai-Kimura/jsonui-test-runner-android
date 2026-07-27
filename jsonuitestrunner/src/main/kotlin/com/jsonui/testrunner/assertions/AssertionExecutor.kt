@@ -27,7 +27,13 @@ import java.io.FileOutputStream
  */
 class AssertionExecutor(
     private val device: UiDevice,
-    private val defaultTimeout: Long = 5000L
+    private val defaultTimeout: Long = 5000L,
+    /**
+     * Cross-screen waits are legitimately slower than in-screen ones: real
+     * suites already hand-write 15-20s after a cold start. Kept distinct from
+     * defaultTimeout so raising one does not silently raise the other.
+     */
+    private val screenTransitionTimeout: Long = 10000L
 ) {
 
     /** State provider for `state` assertions (injected by the runner) */
@@ -62,8 +68,35 @@ class AssertionExecutor(
             "count" -> assertCount(step, timeout)
             "state" -> assertState(step, timeout)
             "screenshot" -> assertScreenshot(step, timeout)
+            "screen" -> assertScreen(step, step.timeout?.toLong() ?: screenTransitionTimeout)
             else -> throw IllegalArgumentException("Unknown assertion: $assertion")
         }
+    }
+
+    /**
+     * `assert: "screen"` — the named screen IS DISPLAYED.
+     *
+     * Not "displayed exclusively": embedded screens, split panes and tab
+     * hosts legitimately show several markers at once, so this only ever
+     * looks at the target's own marker.
+     *
+     * The predicate is just "found", which is the same primitive every other
+     * assertion uses. Measured on API 35: a screen covered by a dialog or a
+     * modal bottom sheet leaves the search ENTIRELY (findObject returns null,
+     * and it is absent from rootInActiveWindow), and a NavHost destination
+     * replaces its source — so no visibleBounds test and no window scoping
+     * are needed to tell "displayed" from "still composed underneath".
+     */
+    private fun assertScreen(step: TestStep, timeout: Long) {
+        val screenId = step.name ?: throw IllegalArgumentException("screen requires 'name'")
+        val marker = ScreenMarker.tagFor(screenId)
+
+        val deadline = System.currentTimeMillis() + timeout
+        while (System.currentTimeMillis() < deadline) {
+            if (device.findObject(By.res(marker)) != null) return
+            Thread.sleep(100)
+        }
+        throw AssertionError(ScreenMarker.diagnosis(device, screenId))
     }
 
     private fun assertVisible(step: TestStep, timeout: Long) {

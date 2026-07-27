@@ -24,6 +24,20 @@ import com.jsonui.testrunner.models.matchesResponsive
  */
 data class TestRunnerConfig(
     val defaultTimeout: Long = 5000L,
+    /**
+     * Verify the screen marker automatically whenever a flow's inline step
+     * moves to a different `screen`, without the test spelling an assertion.
+     * Requires the app to be built with a library new enough to emit markers,
+     * so it stays opt-in until a project has rebuilt; the canonical end state
+     * is on-by-default.
+     */
+    val verifyScreenTransitions: Boolean = false,
+    /**
+     * Timeout for those implicit verifications. Deliberately larger than
+     * defaultTimeout: real cross-screen waits already use 15-20s after a cold
+     * start.
+     */
+    val screenTransitionTimeout: Long = 10000L,
     val screenshotOnFailure: Boolean = true,
     val platform: String = "android",
     val verbose: Boolean = false,
@@ -683,6 +697,28 @@ class JsonUITestRunner(
         return WindowDimensions((widthPx / density).toInt(), (heightPx / density).toInt())
     }
 
+    /**
+     * The screen the previously executed inline step ran on; null means
+     * "unknown", which forces the next inline step to be verified.
+     */
+    private var trackedScreen: String? = null
+
+    /**
+     * Implicit screen verification (canon: implicitVerification). Runs BEFORE
+     * the step, because the step is meant to run ON that screen.
+     */
+    private fun verifyScreenTransitionIfNeeded(step: FlowTestStep) {
+        if (!config.verifyScreenTransitions) return
+        val screen = step.screen ?: return
+        // Same screen as the last executed step: nothing has changed.
+        if (screen == trackedScreen) return
+
+        assertionExecutor.execute(
+            TestStep(assert = "screen", name = screen, timeout = config.screenTransitionTimeout.toInt())
+        )
+        trackedScreen = screen
+    }
+
     private fun executeFlowStep(step: FlowTestStep, warnings: MutableList<String>) {
         // Step-level `when` for file / block / inline steps
         step.whenCondition?.let { condition ->
@@ -694,6 +730,10 @@ class JsonUITestRunner(
 
         // Handle file reference steps
         if (step.isFileReference) {
+            // A file reference carries no screen of its own, and the case it
+            // runs may end anywhere — reset to unknown so the next inline
+            // step is verified rather than trusted.
+            trackedScreen = null
             executeFileReferenceStep(step, warnings)
             return
         }
@@ -706,6 +746,7 @@ class JsonUITestRunner(
 
         // Handle inline steps - convert FlowTestStep to TestStep and execute
         if (step.action != null || step.assert != null) {
+            verifyScreenTransitionIfNeeded(step)
             executeStepGuarded(step.toTestStep(), warnings)
         }
     }
