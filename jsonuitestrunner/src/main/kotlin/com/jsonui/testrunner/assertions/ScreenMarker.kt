@@ -17,9 +17,10 @@ object ScreenMarker {
     /**
      * Turns a failed screen assertion into one of the canonical failure
      * classes, so the message says what went wrong rather than just "not
-     * found". A missing marker anywhere is stale generated code or a stale
-     * library pin (infrastructure); the previous screen still being the only
-     * one present means the navigation genuinely did not happen.
+     * found". The class names the likely CAUSE, not a severity — every one of
+     * them fails the assertion just the same. A missing marker anywhere points
+     * at the build (stale generated code or a stale library pin); the previous
+     * screen still being the only one present points at the app or the test.
      */
     fun diagnosis(device: UiDevice, screenId: String): String {
         val present = presentMarkers(device)
