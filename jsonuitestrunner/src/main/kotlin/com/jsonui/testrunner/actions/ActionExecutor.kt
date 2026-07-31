@@ -288,7 +288,14 @@ class ActionExecutor(
 
         val centerX = bounds.centerX()
         val centerY = bounds.centerY()
-        val swipeDistance = minOf(bounds.width(), bounds.height()) / 2
+        // The gesture must START strictly inside the element: Compose routes
+        // the whole pointer stream by the hit test of the DOWN event, and
+        // center ± width/2 is the element's exclusive edge pixel — a down
+        // there misses the node, so a drag detector on it (onPan) never sees
+        // the gesture. Measured on the conformance host: edge-start never
+        // fires, 8px-inset start always does. Inset both endpoints.
+        val inset = 8
+        val swipeDistance = (minOf(bounds.width(), bounds.height()) / 2 - inset).coerceAtLeast(1)
 
         when (direction) {
             "up" -> device.swipe(centerX, centerY + swipeDistance, centerX, centerY - swipeDistance, 10)
