@@ -96,7 +96,8 @@ class AssertionExecutor(
             if (device.findObject(By.res(marker)) != null) return
             Thread.sleep(100)
         }
-        throw AssertionError(ScreenMarker.diagnosis(device, screenId))
+        val appPackage = InstrumentationRegistry.getInstrumentation().targetContext.packageName
+        throw AssertionError(ScreenMarker.diagnosis(device, screenId, appPackage))
     }
 
     private fun assertVisible(step: TestStep, timeout: Long) {
