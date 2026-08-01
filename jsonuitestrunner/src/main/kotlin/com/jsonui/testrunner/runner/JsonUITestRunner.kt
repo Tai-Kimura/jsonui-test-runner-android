@@ -45,6 +45,15 @@ data class TestRunnerConfig(
     val platform: String = "android",
     val verbose: Boolean = false,
     /**
+     * Extra attempts for a FAILED case (or flow body) before recording the
+     * failure — 0 (default) keeps single-run behaviour. The final result
+     * carries `attempts` (total runs) and a pass after a retry is marked
+     * `flaky` in the results JSON. Retries re-run the steps as-is (no
+     * re-launch between attempts), so cases that mutate app state
+     * non-idempotently may not benefit.
+     */
+    val caseRetries: Int = 0,
+    /**
      * Root directory for test artifacts (both `screenshot` action steps and
      * failure screenshots, plus recordings). Defaults to
      * `<external files dir>/jsonui-artifacts` when null — an adb-pullable
@@ -293,7 +302,12 @@ class JsonUITestRunner(
                 ))
                 continue
             }
-            results.add(runTestCase(test.metadata.name, testCase))
+            val (result, attempts) = CaseRetry.run(
+                retries = config.caseRetries,
+                isPass = { r: TestResult -> r.passed },
+                onRetry = { n, max -> log("  Case ${testCase.name} failed — retry attempt $n/$max") }
+            ) { runTestCase(test.metadata.name, testCase) }
+            results.add(result.copy(attempts = attempts))
         }
 
         // Teardown (guaranteed). A teardown failure is recorded as an extra failed result.
@@ -388,38 +402,59 @@ class JsonUITestRunner(
         // A flow acts as a single case for artifact identity purposes.
         currentTestName = test.metadata.name
         currentCaseName = "flow"
-        startCaseRecording(test.metadata.name, "flow")
 
-        try {
-            // Run setup
-            test.setup?.let { setup ->
-                log("Running flow setup...")
-                executeFlowSteps(setup, currentWarnings)
-            }
+        // The flow body (setup + steps) is the retry unit: flows begin with
+        // their own launch/navigation steps, so a re-run starts clean.
+        // Teardown still runs exactly once, after the final attempt, and
+        // warnings from a failed non-final attempt are dropped (same rule as
+        // the `retry` step). Recording/failure screenshots happen per
+        // attempt; the last attempt's artifacts survive.
+        val maxAttempts = maxOf(0, config.caseRetries) + 1
+        var flowAttempts = 0
+        val flowWarnings = mutableListOf<String>()
+        do {
+            flowAttempts++
+            flowError = null
+            currentWarnings = mutableListOf()
+            startCaseRecording(test.metadata.name, "flow")
 
-            // Run flow steps
-            log("Running flow steps...")
-            executeFlowSteps(test.steps, currentWarnings)
-            finishCaseRecording(passed = true)
-        } catch (e: Throwable) {
-            rethrowIfFatal(e)
-            flowError = e.message ?: e.toString()
-            log("Flow test failed: $flowError")
-            finishCaseRecording(passed = false)
-            // Parity with screen-test cases (and iOS/web flows): capture the
-            // failure moment — flows previously took no failure screenshot.
-            if (config.screenshotOnFailure) {
-                takeScreenshot("failure")
+            try {
+                // Run setup
+                test.setup?.let { setup ->
+                    log("Running flow setup...")
+                    executeFlowSteps(setup, currentWarnings)
+                }
+
+                // Run flow steps
+                log("Running flow steps...")
+                executeFlowSteps(test.steps, currentWarnings)
+                finishCaseRecording(passed = true)
+            } catch (e: Throwable) {
+                rethrowIfFatal(e)
+                flowError = e.message ?: e.toString()
+                log("Flow test failed: $flowError")
+                finishCaseRecording(passed = false)
+                // Parity with screen-test cases (and iOS/web flows): capture the
+                // failure moment — flows previously took no failure screenshot.
+                if (config.screenshotOnFailure) {
+                    takeScreenshot("failure")
+                }
             }
-        }
+            if (flowError == null || flowAttempts >= maxAttempts) {
+                flowWarnings.addAll(currentWarnings)
+            } else {
+                log("  Flow failed — retry attempt ${flowAttempts + 1}/$maxAttempts")
+            }
+        } while (flowError != null && flowAttempts < maxAttempts)
 
         results.add(TestResult(
             testName = test.metadata.name,
             caseName = "flow",
             passed = flowError == null,
             error = flowError,
-            warnings = currentWarnings.toList(),
-            durationMs = System.currentTimeMillis() - startTime
+            warnings = flowWarnings.toList(),
+            durationMs = System.currentTimeMillis() - startTime,
+            attempts = flowAttempts
         ))
 
         // Teardown (guaranteed), runs even when the flow body failed

@@ -296,7 +296,13 @@ data class TestResult(
      */
     val skipReason: String? = null,
     /** Warnings recorded during the case (optional-step failures, baseline created, ...) */
-    val warnings: List<String> = emptyList()
+    val warnings: List<String> = emptyList(),
+    /**
+     * How many times the case ran in total, retries included (1 = settled on
+     * the first run). Null on skipped rows — a case that never ran has no
+     * attempt count (results.schema.json attempts).
+     */
+    val attempts: Int? = null
 )
 
 data class TestSuiteResult(

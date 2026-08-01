@@ -56,6 +56,15 @@ object ResultsWriter {
                                 for (warning in result.warnings) add(JsonPrimitive(warning))
                             })
                         }
+                        // attempts = total runs (1 = settled first try); flaky
+                        // only on a pass that needed retries — the validator
+                        // rejects flaky on failures (results.schema.json).
+                        if (!result.skipped && result.attempts != null) {
+                            put("attempts", result.attempts)
+                            if (result.passed && result.attempts > 1) {
+                                put("flaky", true)
+                            }
+                        }
                         put("durationMs", result.durationMs)
                     })
                 }
