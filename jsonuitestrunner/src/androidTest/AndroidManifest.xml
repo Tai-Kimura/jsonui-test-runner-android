@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The test APK has no app of its own, so LaunchProbeActivity stands in for
+     the consumer app's entry point: it is what getLaunchIntentForPackage
+     resolves to, which is what lets the on-device suite measure that
+     relaunchApp really starts an activity and that JSONUI_TEST_ARGS rides
+     its intent. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="com.jsonui.testrunner.runner.LaunchProbeActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

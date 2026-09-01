@@ -253,8 +253,11 @@ data class StateCondition(
 
 /**
  * App launch configuration applied before the app under test starts.
- * Android mapping: clearState -> `pm clear`, permissions -> `pm grant`/`pm revoke`,
- * arguments -> JSONUI_TEST_ARGS string extra (JSON) on the launch intent.
+ * Android mapping: clearState -> in-process wipe of files/shared_prefs/
+ * databases/cache/code_cache (persisted state only — process memory survives
+ * the relaunch; `pm clear` would kill the instrumentation's own process),
+ * permissions -> `pm grant`/`pm revoke`,
+ * arguments -> JSONUI_TEST_ARGS string extra (JSON) on the relaunch intent.
  */
 @Serializable
 data class LaunchConfig(

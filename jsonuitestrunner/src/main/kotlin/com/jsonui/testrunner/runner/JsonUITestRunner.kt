@@ -104,6 +104,29 @@ private val ANDROID_PERMISSION_MAP = mapOf(
 )
 
 /**
+ * The single decision point for the post-mocks/launch relaunch: mock
+ * scenarios need the app to re-fetch under them, a launch config needs a
+ * start that carries it. Returns the reason to log, or null for no relaunch.
+ * A pure function so the JVM suite can pin the truth table.
+ */
+internal fun relaunchReason(mocks: Boolean, launch: Boolean): String? = when {
+    mocks && launch -> "mocks+launch"
+    mocks -> "mocks"
+    launch -> "launch"
+    else -> null
+}
+
+/**
+ * The arguments half of a launch configuration, as intent extras: the JSON
+ * object rides JSONUI_TEST_ARGS and the app reads it off the launched
+ * activity's intent (see LaunchConfig).
+ */
+internal fun launchExtras(launch: LaunchConfig?): Map<String, String> {
+    val args = launch?.arguments ?: return emptyMap()
+    return mapOf("JSONUI_TEST_ARGS" to kotlinx.serialization.json.JsonObject(args).toString())
+}
+
+/**
  * Main test runner for JsonUI tests
  */
 class JsonUITestRunner(
@@ -229,13 +252,13 @@ class JsonUITestRunner(
             }
         }
 
-        // Apply the file-level mock scenario set BEFORE the app re-fetches, then
-        // relaunch so the screen renders under the selected scenarios. Scenario
-        // switching is per-file for screen tests; there is no per-case re-open (§8.1).
+        // Apply the file-level mock scenario set BEFORE the app re-fetches.
+        // Scenario switching is per-file for screen tests; there is no
+        // per-case re-open (§8.1). The relaunch that makes the scenarios
+        // take effect is shared with the launch config below.
         test.mocks?.let { mocks ->
             try {
                 requireMockClient("mocks").scenarioSet(mocks)
-                relaunchApp()
             } catch (e: Exception) {
                 val failed = test.cases.map {
                     TestResult(test.metadata.name, it.name, passed = false, error = e.message, durationMs = 0)
@@ -244,8 +267,15 @@ class JsonUITestRunner(
             }
         }
 
-        // Apply launch configuration before running cases
-        test.launch?.let { applyLaunch(it) }
+        // Apply the state half of the launch config (wipe, permissions), then
+        // relaunch ONCE for whichever of mocks/launch asked for it, with the
+        // launch arguments riding the intent. One decision point on purpose:
+        // the old shape relaunched for mocks and then applied the launch
+        // config to an app that had already rendered under it.
+        test.launch?.let { applyLaunchState(it) }
+        relaunchReason(mocks = test.mocks != null, launch = test.launch != null)?.let { reason ->
+            relaunchApp(reason, launchExtras(test.launch))
+        }
 
         // Run setup once. If it throws, every case is recorded as failed but
         // teardown still runs (§7 teardown guarantee).
@@ -376,14 +406,13 @@ class JsonUITestRunner(
             }
         }
 
-        // Apply the file-level mock scenario set BEFORE the app fetches, then
-        // relaunch so the flow starts under the selected scenarios. Parity with
-        // runScreenTest (§8.1); a failure here fails the flow rather than
-        // silently running the default scenario.
+        // Apply the file-level mock scenario set BEFORE the app fetches.
+        // Parity with runScreenTest (§8.1); a failure here fails the flow
+        // rather than silently running the default scenario. The relaunch that
+        // makes the scenarios take effect is shared with the launch config below.
         test.mocks?.let { mocks ->
             try {
                 requireMockClient("mocks").scenarioSet(mocks)
-                relaunchApp()
             } catch (e: Exception) {
                 val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, durationMs = 0))
                 val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
@@ -392,8 +421,15 @@ class JsonUITestRunner(
             }
         }
 
-        // Apply launch configuration before running
-        test.launch?.let { applyLaunch(it) }
+        // Apply the state half of the launch config (wipe, permissions), then
+        // relaunch ONCE for whichever of mocks/launch asked for it, with the
+        // launch arguments riding the intent. One decision point on purpose:
+        // the old shape relaunched for mocks and then applied the launch
+        // config to an app that had already rendered under it.
+        test.launch?.let { applyLaunchState(it) }
+        relaunchReason(mocks = test.mocks != null, launch = test.launch != null)?.let { reason ->
+            relaunchApp(reason, launchExtras(test.launch))
+        }
 
         val results = mutableListOf<TestResult>()
         currentWarnings = mutableListOf()
@@ -870,16 +906,28 @@ class JsonUITestRunner(
     // MARK: - Launch Configuration
 
     /**
-     * Apply a launch configuration before a test runs. clearState → `pm clear`,
-     * permissions → `pm grant`/`pm revoke`, arguments → stored for the app-side
-     * contract (JSONUI_TEST_ARGS). Best-effort: shell failures are logged.
+     * Apply the state half of a launch configuration: clearState wipes the
+     * app's persisted state, permissions are granted/revoked. Best-effort:
+     * failures are logged. The arguments half rides the relaunch intent
+     * (see [launchExtras]); the relaunch itself is decided at the call site
+     * ([relaunchReason]) so mocks and launch share one restart.
+     *
+     * clearState is an IN-PROCESS wipe (files, shared_prefs, databases,
+     * cache, code_cache), not `pm clear`: instrumentation runs in the target
+     * package's process, so `pm clear` force-stops the process running the
+     * tests — measured 2026-09-02, the run died mid-flight ("Instrumentation
+     * run failed due to Process crashed"), no results, no teardown. Boundary:
+     * persisted state only — process memory (loaded singletons, an already
+     * cached SharedPreferences instance) survives the relaunch.
      */
-    private fun applyLaunch(launch: LaunchConfig) {
-        val packageName = InstrumentationRegistry.getInstrumentation().targetContext.packageName
+    private fun applyLaunchState(launch: LaunchConfig) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val packageName = context.packageName
 
         if (launch.clearState == true) {
-            log("Launch: clearing state (pm clear $packageName)")
-            runCatching { device.executeShellCommand("pm clear $packageName") }
+            log("Launch: clearing app state (in-process wipe of $packageName)")
+            runCatching { clearAppState(context) }
+                .onFailure { log("Launch: clearState wipe failed: ${it.message}") }
         }
 
         launch.permissions?.forEach { (name, value) ->
@@ -890,30 +938,42 @@ class JsonUITestRunner(
                 "unset" -> { /* leave at system default */ }
             }
         }
+    }
 
-        launch.arguments?.let { args ->
-            // Store as JSON for the app-side contract; the app reads JSONUI_TEST_ARGS.
-            val json = kotlinx.serialization.json.JsonObject(args).toString()
-            log("Launch arguments: $json")
+    /** The persisted-state roots [applyLaunchState] wipes, from inside the app's own process. */
+    private fun clearAppState(context: android.content.Context) {
+        listOf(
+            context.filesDir,
+            context.cacheDir,
+            context.codeCacheDir,
+            java.io.File(context.dataDir, "shared_prefs"),
+            java.io.File(context.dataDir, "databases")
+        ).forEach { dir ->
+            dir.listFiles()?.forEach { child -> child.deleteRecursively() }
         }
     }
 
     /**
-     * Relaunch the app under test so a freshly-set mock scenario is fetched.
-     * Uses the package launcher intent with CLEAR_TASK to reset the back stack.
+     * (Re)start the app under test from its launcher intent with CLEAR_TASK:
+     * mock scenarios are re-fetched and launch extras (JSONUI_TEST_ARGS)
+     * arrive on a fresh back stack. `reason` names who asked (mocks / launch
+     * / mocks+launch) in the log. Unlike XCUIApplication.launch() this reuses
+     * the process — the activity and its intent are new, process memory is not.
      */
-    private fun relaunchApp() {
+    private fun relaunchApp(reason: String, extras: Map<String, String> = emptyMap()) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
         if (intent == null) {
-            log("relaunchApp: no launch intent for ${context.packageName}")
+            log("relaunchApp($reason): no launch intent for ${context.packageName}")
             return
         }
         intent.addFlags(
             android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
                 android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
         )
+        extras.forEach { (key, value) -> intent.putExtra(key, value) }
+        log("relaunchApp($reason)" + if (extras.isEmpty()) "" else " extras=${extras.keys}")
         context.startActivity(intent)
         device.waitForIdle(config.defaultTimeout)
         Thread.sleep(500) // let Compose semantics settle
