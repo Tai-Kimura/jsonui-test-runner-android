@@ -127,6 +127,29 @@ internal fun launchExtras(launch: LaunchConfig?): Map<String, String> {
 }
 
 /**
+ * The deny half of the permission contract, as a pure decision: deny is an
+ * ASSERT of the current state, never a revoke. Returns the (declared name,
+ * android permission) pairs that are declared deny but currently granted —
+ * the states this driver cannot reach, because measured 2026-09-02 there is
+ * no way to move granted -> denied from inside an instrumentation run:
+ * `pm revoke` kills the instrumented process (ActivityManager: "permissions
+ * revoked") and `appops set` on permission-backed ops is a silent no-op.
+ * allow and unset never violate (grant is safe to execute; unset leaves
+ * inherited state untouched).
+ */
+internal fun permissionDenyViolations(
+    permissions: Map<String, String>?,
+    isGranted: (String) -> Boolean
+): List<Pair<String, String>> =
+    permissions.orEmpty().mapNotNull { (name, value) ->
+        val androidPermission = ANDROID_PERMISSION_MAP[name] ?: return@mapNotNull null
+        if (value == "deny" && isGranted(androidPermission)) name to androidPermission else null
+    }
+
+/** Thrown by [JsonUITestRunner] when a launch config asserts a state the driver cannot reach. */
+internal class LaunchConfigException(message: String) : IllegalStateException(message)
+
+/**
  * Main test runner for JsonUI tests
  */
 class JsonUITestRunner(
@@ -272,7 +295,16 @@ class JsonUITestRunner(
         // launch arguments riding the intent. One decision point on purpose:
         // the old shape relaunched for mocks and then applied the launch
         // config to an app that had already rendered under it.
-        test.launch?.let { applyLaunchState(it) }
+        try {
+            test.launch?.let { applyLaunchState(it) }
+        } catch (e: LaunchConfigException) {
+            val failed = test.cases.map {
+                TestResult(test.metadata.name, it.name, passed = false, error = e.message, durationMs = 0)
+            }
+            val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
+            writeResultsIfNeeded(suiteResult)
+            return suiteResult
+        }
         relaunchReason(mocks = test.mocks != null, launch = test.launch != null)?.let { reason ->
             relaunchApp(reason, launchExtras(test.launch))
         }
@@ -426,7 +458,14 @@ class JsonUITestRunner(
         // launch arguments riding the intent. One decision point on purpose:
         // the old shape relaunched for mocks and then applied the launch
         // config to an app that had already rendered under it.
-        test.launch?.let { applyLaunchState(it) }
+        try {
+            test.launch?.let { applyLaunchState(it) }
+        } catch (e: LaunchConfigException) {
+            val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, durationMs = 0))
+            val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
+            writeResultsIfNeeded(suiteResult)
+            return suiteResult
+        }
         relaunchReason(mocks = test.mocks != null, launch = test.launch != null)?.let { reason ->
             relaunchApp(reason, launchExtras(test.launch))
         }
@@ -907,8 +946,12 @@ class JsonUITestRunner(
 
     /**
      * Apply the state half of a launch configuration: clearState wipes the
-     * app's persisted state, permissions are granted/revoked. Best-effort:
-     * failures are logged. The arguments half rides the relaunch intent
+     * app's persisted state, permission allows are granted, and permission
+     * denies are ASSERTED — a granted permission declared deny throws
+     * [LaunchConfigException] (which the call sites turn into a loud
+     * per-file failure), because no mechanism can deny it mid-run without
+     * killing the process. clearState/permission-grant failures are logged
+     * best-effort. The arguments half rides the relaunch intent
      * (see [launchExtras]); the relaunch itself is decided at the call site
      * ([relaunchReason]) so mocks and launch share one restart.
      *
@@ -930,12 +973,35 @@ class JsonUITestRunner(
                 .onFailure { log("Launch: clearState wipe failed: ${it.message}") }
         }
 
+        // deny FIRST, before any grant this same config performs, so a file
+        // declaring {a: allow, b: deny} is judged against the state it arrived
+        // with. deny is an assert: measured 2026-09-02, `pm revoke` kills the
+        // instrumented process and appops is a silent no-op on
+        // permission-backed ops, so a granted permission cannot be denied
+        // from inside the run — the only honest outcome is a loud per-file
+        // failure that names the cure.
+        val violations = permissionDenyViolations(launch.permissions) { permission ->
+            context.checkSelfPermission(permission) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (violations.isNotEmpty()) {
+            throw LaunchConfigException(
+                "launch.permissions deny for " +
+                    violations.joinToString { "'${it.first}' (${it.second})" } +
+                    ": currently GRANTED. An in-run revoke kills the instrumented " +
+                    "process (ActivityManager: permissions revoked), so the driver " +
+                    "will not execute one. Establish a denied baseline before " +
+                    "instrumentation (jsonui-test pregrant), or split files that " +
+                    "deny after an allow into separate runs."
+            )
+        }
+
         launch.permissions?.forEach { (name, value) ->
             val androidPermission = ANDROID_PERMISSION_MAP[name] ?: return@forEach
             when (value) {
                 "allow" -> runCatching { device.executeShellCommand("pm grant $packageName $androidPermission") }
-                "deny" -> runCatching { device.executeShellCommand("pm revoke $packageName $androidPermission") }
-                "unset" -> { /* leave at system default */ }
+                "deny" -> { /* asserted denied above; nothing to execute */ }
+                "unset" -> { /* leaves inherited state untouched (see LaunchConfig) */ }
             }
         }
     }

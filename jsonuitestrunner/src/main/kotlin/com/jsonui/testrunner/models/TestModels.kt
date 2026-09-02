@@ -256,7 +256,11 @@ data class StateCondition(
  * Android mapping: clearState -> in-process wipe of files/shared_prefs/
  * databases/cache/code_cache (persisted state only — process memory survives
  * the relaunch; `pm clear` would kill the instrumentation's own process),
- * permissions -> `pm grant`/`pm revoke`,
+ * permissions -> allow is `pm grant`; deny is an ASSERT of the current state
+ * (satisfied when already denied, loud per-file failure when granted — an
+ * in-run revoke kills the instrumented process, and grants persist across
+ * update-installs, so a denied baseline comes from a pre-instrumentation
+ * step); unset leaves inherited state untouched,
  * arguments -> JSONUI_TEST_ARGS string extra (JSON) on the relaunch intent.
  */
 @Serializable

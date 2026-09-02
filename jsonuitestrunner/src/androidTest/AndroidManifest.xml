@@ -5,6 +5,12 @@
      relaunchApp really starts an activity and that JSONUI_TEST_ARGS rides
      its intent. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- For PermissionDenyOnDeviceTest: CAMERA is granted in-run to stage the
+         loud-fail path; READ_CONTACTS is never granted anywhere so the
+         satisfied path starts denied. Keep that split — reusing one
+         permission for both would make the tests order-dependent. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
     <application>
         <activity
             android:name="com.jsonui.testrunner.runner.LaunchProbeActivity"
