@@ -789,20 +789,16 @@ class JsonUITestRunner(
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val density = context.resources.displayMetrics.density
-        // Root of the active accessibility window, NOT findObject(By.pkg(...)):
-        // By.pkg matches an ARBITRARY first node of the package — measured on a
-        // Compose tablet window it non-deterministically returned a 24x24dp
-        // icon leaf, flipping a 1280x800dp regular device into `compact` and
-        // running compact-gated steps on tablet. The a11y root IS the app
-        // window (same acquisition family scrollUntilVisible already uses).
-        // The package guard skips roots owned by another process (e.g. an IME
-        // window being active) rather than measuring the wrong window.
-        val bounds = runCatching {
-            instrumentation.uiAutomation.rootInActiveWindow
-                ?.takeIf { it.packageName == context.packageName }
-                ?.let { root -> android.graphics.Rect().also { root.getBoundsInScreen(it) } }
-        }.getOrNull()
-        val (widthPx, heightPx) = if (bounds != null && !bounds.isEmpty) {
+        // Root of the active accessibility window through the driver's single
+        // resolver (AppWindow) — NOT findObject(By.pkg(...)), which matches an
+        // ARBITRARY first node of the package: measured on a Compose tablet
+        // window it non-deterministically returned a 24x24dp icon leaf,
+        // flipping a 1280x800dp regular device into `compact` and running
+        // compact-gated steps on tablet. scrollUntilVisible's fallback surface
+        // is the same resolver (its By.pkg copy of this trap was removed in
+        // 1.8.6 after it popped screens via the back-gesture edge zone).
+        val bounds = AppWindow.rootBounds(instrumentation)
+        val (widthPx, heightPx) = if (bounds != null) {
             bounds.width() to bounds.height()
         } else {
             device.displayWidth to device.displayHeight

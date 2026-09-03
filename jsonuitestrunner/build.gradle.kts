@@ -17,6 +17,19 @@ android {
         consumerProguardFiles("consumer-rules.pro")
     }
 
+    testOptions {
+        // The androidTest APK's own targetSdk. Unset, it defaults to minSdk
+        // (24), and API 34+ greets such an APK with the system's "built for
+        // an older version of Android" dialog on every launch of the probe
+        // activity. That dialog is an `android`-owned window that outlives
+        // the instrumentation process and becomes the ACTIVE a11y window,
+        // so any on-device test that needs the app window (AppWindow root,
+        // scroll surface) sees a system dialog instead. Measured 2026-09-03
+        // on conf_ci (API 35): rootInActiveWindow = android/FrameLayout
+        // 1160x413, the probe activity absent from uiAutomation.windows.
+        targetSdk = 34
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

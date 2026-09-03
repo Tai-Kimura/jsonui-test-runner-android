@@ -14,6 +14,7 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import com.jsonui.testrunner.models.TestStep
+import com.jsonui.testrunner.runner.AppWindow
 import java.io.File
 
 /**
@@ -602,11 +603,18 @@ class ActionExecutor(
         // Resolve the scrollable container: explicit id, else the app-under-test
         // window bounds so fallback swipes stay ON the app surface (a fixed
         // screen-center swipe can drift onto the status bar / notification shade
-        // over repeated scrolls and hide the app). getSwipeCoordinates is the
-        // final fallback only when even the app bounds are unavailable.
-        val containerBounds: Rect? = step.container?.let { containerId ->
+        // over repeated scrolls and hide the app). The source is kept for the
+        // failure text: which rect the swipes ran in is the one fact that
+        // separates "target absent" from "swiped in the wrong place" (measured
+        // 2026-09-03: a header-sized rect at the left edge turned every swipe
+        // into a back gesture, and the plain "not found" read as flaky).
+        val explicitContainer = step.container?.let { containerId ->
             device.findObject(By.res(containerId))?.visibleBounds
-        } ?: appSurfaceBounds()
+                ?.takeIf { !it.isEmpty }
+                ?.let { SurfaceBounds(it, "container '$containerId'") }
+        }
+        val surface = explicitContainer ?: appSurfaceBounds()
+        val containerBounds = surface.rect
 
         // `direction` is the FIRST direction to search, not a constraint: when
         // the primary sweep reaches the end of content without a hit, the
@@ -627,7 +635,10 @@ class ActionExecutor(
         if (searchInDirection(step.container, containerBounds, id, reverse,
                 System.currentTimeMillis() + maxOf(timeout / 2, 6000L))) return
 
-        throw AssertionError("Element '$id' not found after scrolling to both ends")
+        throw AssertionError(
+            "Element '$id' not found after scrolling to both ends " +
+                "(swipes ran within ${surface.rect.toShortString()} from ${surface.source})"
+        )
     }
 
     private fun oppositeDirection(direction: String): String = when (direction) {
@@ -647,7 +658,7 @@ class ActionExecutor(
      */
     private fun searchInDirection(
         containerId: String?,
-        containerBounds: Rect?,
+        containerBounds: Rect,
         id: String,
         direction: String,
         deadline: Long
@@ -667,12 +678,7 @@ class ActionExecutor(
         var unchangedCount = 0
 
         while (System.currentTimeMillis() < deadline) {
-            if (containerBounds != null && !containerBounds.isEmpty) {
-                scrollWithinBounds(containerBounds, direction)
-            } else {
-                val (sx, sy, ex, ey) = getSwipeCoordinates(direction)
-                device.swipe(sx, sy, ex, ey, 20)
-            }
+            scrollWithinBounds(containerBounds, direction)
 
             // Let the fling settle before looking: an immediate findObject reads
             // the mid-scroll (or not-yet-updated) a11y tree. The bounded wait
@@ -736,9 +742,8 @@ class ActionExecutor(
      * and a fresh Compose semantics pass at the overscroll clamp without
      * materially losing the end position.
      */
-    private fun nudgeBackward(bounds: Rect?, direction: String) {
-        val b = bounds ?: appSurfaceBounds() ?: return
-        val cx = b.centerX()
+    private fun nudgeBackward(b: Rect, direction: String) {
+        val cx = gestureSafeX(b.centerX())
         val cy = b.centerY()
         val d = 60 // px each way; slow steps make it a drag, not a fling
         when (direction) {
@@ -766,10 +771,9 @@ class ActionExecutor(
      * missing), so healthy pages never pay for it. Returns true when the
      * target appeared after a recovery round.
      */
-    private fun recoverFrozenSemantics(id: String, bounds: Rect?, direction: String): Boolean {
+    private fun recoverFrozenSemantics(id: String, b: Rect, direction: String): Boolean {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        val b = bounds ?: appSurfaceBounds() ?: return false
-        val cx = b.centerX()
+        val cx = gestureSafeX(b.centerX())
         val cy = b.centerY()
         val d = (b.height() * 0.25).toInt().coerceAtLeast(120)
         repeat(2) {
@@ -859,29 +863,63 @@ class ActionExecutor(
         }.getOrDefault(false)
     }
 
+    /** A rect swipes run in, plus where it came from (named in failure text). */
+    private class SurfaceBounds(val rect: Rect, val source: String)
+
     /**
-     * The app-under-test window bounds. Used to keep fallback scroll gestures on
-     * the app surface instead of the raw screen center (which can drift onto the
-     * status bar / notification shade). Returns null if the window can't be found.
+     * The app-under-test window bounds, used to keep fallback scroll gestures
+     * on the app surface instead of the raw screen center (which can drift
+     * onto the status bar / notification shade).
+     *
+     * Resolved through the driver's single root resolver ([AppWindow]) — the
+     * active a11y window root, package-guarded. NOT `findObject(By.pkg(..))`:
+     * that returned an arbitrary first node, and right after a bottom sheet
+     * closed it was a ~148x63px header node at x=0, which put every fallback
+     * swipe at x=74 inside the back-gesture zone (screens popped, target
+     * "not found"). When the app root cannot be resolved (another package's
+     * window is active), the full display is the surface: a 35% swipe around
+     * its center never reaches the status bar.
      */
-    private fun appSurfaceBounds(): Rect? = runCatching {
-        val pkg = InstrumentationRegistry.getInstrumentation().targetContext.packageName
-        device.findObject(By.pkg(pkg))?.visibleBounds
-    }.getOrNull()
+    private fun appSurfaceBounds(): SurfaceBounds {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        AppWindow.rootBounds(instrumentation)?.let {
+            return SurfaceBounds(it, "app window root (rootInActiveWindow)")
+        }
+        return SurfaceBounds(
+            Rect(0, 0, device.displayWidth, device.displayHeight),
+            "display (app window root not resolvable)"
+        )
+    }
 
     private fun scrollWithinBounds(bounds: Rect, direction: String) {
-        val cx = bounds.centerX()
-        val cy = bounds.centerY()
-        val dy = (bounds.height() * 0.35).toInt()
-        val dx = (bounds.width() * 0.35).toInt()
-        when (direction) {
-            // Content moves toward `direction`; the finger swipes the opposite way.
-            "up" -> device.swipe(cx, cy - dy, cx, cy + dy, 20)
-            "down" -> device.swipe(cx, cy + dy, cx, cy - dy, 20)
-            "left" -> device.swipe(cx - dx, cy, cx + dx, cy, 20)
-            "right" -> device.swipe(cx + dx, cy, cx - dx, cy, 20)
-            else -> throw IllegalArgumentException("Invalid direction: $direction")
-        }
+        // Content moves toward `direction`; the finger swipes the opposite way.
+        // Pure geometry in scrollSwipe (JVM-tested), including the rule that a
+        // swipe never STARTS inside the back-gesture edge zones.
+        val line = scrollSwipe(
+            bounds.left, bounds.top, bounds.right, bounds.bottom,
+            direction, device.displayWidth, gestureEdgeInsetPx()
+        )
+        device.swipe(line.startX, line.startY, line.endX, line.endY, 20)
+    }
+
+    private fun gestureSafeX(x: Int): Int =
+        clampToGestureSafeX(x, device.displayWidth, gestureEdgeInsetPx())
+
+    /**
+     * Width in px of the left/right band a touch must not go DOWN in: the
+     * larger of 48dp and what the system itself reports as its gesture insets
+     * (API 30+; the report is only advisory, the 48dp floor is the contract).
+     */
+    private fun gestureEdgeInsetPx(): Int {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val floor = (48 * context.resources.displayMetrics.density).toInt()
+        val reported = if (android.os.Build.VERSION.SDK_INT >= 30) runCatching {
+            val wm = context.getSystemService(android.view.WindowManager::class.java)
+            val insets = wm.currentWindowMetrics.windowInsets
+                .getInsets(android.view.WindowInsets.Type.systemGestures())
+            maxOf(insets.left, insets.right)
+        }.getOrDefault(0) else 0
+        return maxOf(floor, reported)
     }
 
     private fun executeReadText(step: TestStep, timeout: Long) {
