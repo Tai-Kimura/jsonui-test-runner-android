@@ -15,6 +15,7 @@ import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.runner.AppWindow
+import com.jsonui.testrunner.runner.ProjectionProbe
 import java.io.File
 
 /**
@@ -1052,7 +1053,9 @@ class ActionExecutor(
             Thread.sleep(100)
         }
 
-        throw AssertionError("Element '$id' not found by resource-id within ${timeout}ms")
+        throw AssertionError(
+            "Element '$id' not found by resource-id within ${timeout}ms\n" + ProjectionProbe.report(id)
+        )
     }
 
     private fun getSwipeCoordinates(direction: String): SwipeCoordinates {

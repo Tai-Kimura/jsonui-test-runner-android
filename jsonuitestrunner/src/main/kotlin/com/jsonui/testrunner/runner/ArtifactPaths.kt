@@ -31,6 +31,17 @@ object ArtifactPaths {
     fun screenshotFile(root: File, testName: String, caseName: String, name: String): File =
         File(caseDir(root, testName, caseName), "${sanitize(name)}.png")
 
+    /**
+     * `<root>/<testName>/<caseName>/hierarchy.xml` — the RAW window dump kept
+     * on failure. The parsed set the probe reports is a summary, and a
+     * summary cannot be re-asked: a consumer investigation stalled in
+     * exactly that way (2026-09-04), holding counts but no dump, so
+     * "is this id really a resource-id, and where does the missing subtree
+     * start" could not be answered afterwards.
+     */
+    fun hierarchyDumpFile(root: File, testName: String, caseName: String): File =
+        File(caseDir(root, testName, caseName), "hierarchy.xml")
+
     /** `<root>/<testName>/<caseName>/recording.mp4` */
     fun recordingFile(root: File, testName: String, caseName: String): File =
         File(caseDir(root, testName, caseName), "recording.mp4")

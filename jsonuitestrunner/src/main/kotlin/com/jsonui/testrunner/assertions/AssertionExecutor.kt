@@ -7,6 +7,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.jsonui.testrunner.models.TestStep
+import com.jsonui.testrunner.runner.ProjectionProbe
 import com.jsonui.testrunner.runner.ViewModelStateProvider
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -100,11 +101,21 @@ class AssertionExecutor(
         throw AssertionError(ScreenMarker.diagnosis(device, screenId, appPackage))
     }
 
+    /**
+     * "Not found" plus what the accessibility projection actually held, and
+     * whether dropping UiAutomator's cache or resyncing the service brought
+     * it back (ProjectionProbe). Runs only on this failure path, so a green
+     * run pays nothing — and the next intermittent occurrence answers, by
+     * itself, the question a consumer could not reproduce on demand.
+     */
+    private fun elementNotFound(id: String, within: String): String =
+        "Element '$id' not found by resource-id within $within\n" + ProjectionProbe.report(id)
+
     private fun assertVisible(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("visible requires 'id'")
         pollUntil(timeout, id) {
             findElement(id)
-                ?: throw AssertionError("Element '$id' not found by resource-id within ${timeout}ms")
+                ?: throw AssertionError(elementNotFound(id, "${timeout}ms"))
         }
     }
 
@@ -122,7 +133,7 @@ class AssertionExecutor(
         val id = step.id ?: throw IllegalArgumentException("enabled requires 'id'")
         pollUntil(timeout, id) {
             val element = findElement(id)
-                ?: throw AssertionError("Element '$id' not found by resource-id within ${timeout}ms")
+                ?: throw AssertionError(elementNotFound(id, "${timeout}ms"))
             if (!element.isEnabled) {
                 throw AssertionError("Element '$id' should be enabled but it is disabled")
             }
@@ -133,7 +144,7 @@ class AssertionExecutor(
         val id = step.id ?: throw IllegalArgumentException("disabled requires 'id'")
         pollUntil(timeout, id) {
             val element = findElement(id)
-                ?: throw AssertionError("Element '$id' not found by resource-id within ${timeout}ms")
+                ?: throw AssertionError(elementNotFound(id, "${timeout}ms"))
             if (element.isEnabled) {
                 throw AssertionError("Element '$id' should be disabled but it is enabled")
             }
@@ -152,7 +163,7 @@ class AssertionExecutor(
 
     private fun assertTextOnce(step: TestStep, id: String) {
         val element = findElement(id)
-            ?: throw AssertionError("Element '$id' not found by resource-id within a step of polling")
+            ?: throw AssertionError(elementNotFound(id, "a step of polling"))
 
         // For Compose TextField, the editable value is on an EditText-classed
         // a11y node — either the tagged element itself or a descendant.
@@ -427,6 +438,6 @@ class AssertionExecutor(
             Thread.sleep(100)
         }
 
-        throw AssertionError("Element '$id' not found by resource-id within ${timeout}ms")
+        throw AssertionError(elementNotFound(id, "${timeout}ms"))
     }
 }

@@ -514,6 +514,7 @@ class JsonUITestRunner(
                 if (config.screenshotOnFailure) {
                     takeScreenshot("failure")
                 }
+                saveHierarchyDump()
             }
             if (flowError == null || flowAttempts >= maxAttempts) {
                 flowWarnings.addAll(currentWarnings)
@@ -605,6 +606,7 @@ class JsonUITestRunner(
             if (config.screenshotOnFailure) {
                 takeScreenshot("failure")
             }
+            saveHierarchyDump()
             TestResult(
                 testName = testName,
                 caseName = testCase.name,
@@ -1075,6 +1077,28 @@ class JsonUITestRunner(
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val base = context.getExternalFilesDir(null) ?: context.filesDir
         return java.io.File(base, "jsonui-artifacts")
+    }
+
+    /**
+     * Raw window hierarchy at the first failure of the run. Once per run:
+     * the dump is large and the question it answers ("what did the
+     * projection actually hold when this broke") is answered by one.
+     */
+    private var hierarchyDumpSaved = false
+
+    private fun saveHierarchyDump() {
+        if (hierarchyDumpSaved) return
+        hierarchyDumpSaved = true
+        try {
+            val file = ArtifactPaths.hierarchyDumpFile(
+                artifactsRoot(), currentTestName, currentCaseName
+            )
+            file.parentFile?.mkdirs()
+            file.outputStream().use { device.dumpWindowHierarchy(it) }
+            log("Hierarchy dump saved: ${file.absolutePath}")
+        } catch (e: Exception) {
+            log("Failed to dump hierarchy: ${e.message}")
+        }
     }
 
     private fun takeScreenshot(name: String) {
