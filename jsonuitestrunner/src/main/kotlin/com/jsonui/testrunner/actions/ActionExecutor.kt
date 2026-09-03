@@ -468,19 +468,21 @@ class ActionExecutor(
     }
 
     private fun selectFromOptionList(step: TestStep, timeout: Long) {
-        // Select the option by index, label, or value
-        when {
-            step.index != null -> {
-                // Select by index (preferred for cross-platform consistency)
-                val optionElement = waitForElement("kjui_x7q_option_${step.index}", timeout)
+        // Selector precedence is the schema's: index, then value, then label
+        // (SelectOptionSelector.resolve — shared order with ios / web).
+        when (val selector = SelectOptionSelector.resolve(step.index, step.value, step.label)) {
+            is SelectOptionSelector.ByIndex -> {
+                val optionElement = waitForElement("kjui_x7q_option_${selector.index}", timeout)
                 optionElement.click()
             }
-            step.label != null || step.value != null -> {
-                // Fallback: select by text (label or value).
-                // Explicit non-null binding: Kotlin 2.x no longer smart-casts
-                // `step.label ?: step.value` to String here.
-                val text: String = step.label ?: step.value
-                    ?: throw IllegalArgumentException("selectOption requires 'label' or 'value'")
+            is SelectOptionSelector.ByValue, is SelectOptionSelector.ByLabel -> {
+                // Text match: the KotlinJsonUI option list renders the option's
+                // text, so value and label both resolve through By.text.
+                val text: String = when (selector) {
+                    is SelectOptionSelector.ByValue -> selector.value
+                    is SelectOptionSelector.ByLabel -> selector.label
+                    else -> error("unreachable")
+                }
                 val startTime = System.currentTimeMillis()
                 var found = false
 
@@ -498,7 +500,7 @@ class ActionExecutor(
                     throw AssertionError("Option '$text' not found within ${timeout}ms")
                 }
             }
-            else -> throw IllegalArgumentException("selectOption requires 'index', 'label', or 'value'")
+            null -> throw IllegalArgumentException("selectOption requires 'index', 'value', or 'label'")
         }
         // Note: KotlinJsonUI SelectBox auto-closes on selection, no need to tap Done button
     }
