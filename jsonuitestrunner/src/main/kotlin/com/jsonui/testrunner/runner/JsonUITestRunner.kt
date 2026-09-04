@@ -1140,6 +1140,12 @@ class JsonUITestRunner(
      * mixes stale files; unrelated suites from previous runs are left alone —
      * use `jsonui-test artifacts pull --clean` to clear the device between
      * runs when that matters.
+     *
+     * The mirror is scoped by package (`ArtifactPaths.mirrorRoot`) since
+     * 1.8.9. It used to be one flat root for every app on the device, so on
+     * a shared emulator another app's `artifacts pull --clean` pulled and
+     * deleted this app's runs — there was nothing in the path for the CLI to
+     * scope on, even though the CLI knows the appId.
      */
     private fun mirrorArtifactsForPull(testName: String) {
         if (config.screenshotDir != null) return
@@ -1147,8 +1153,9 @@ class JsonUITestRunner(
         val src = java.io.File(artifactsRoot(), suite)
         if (!src.exists()) return
         try {
-            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-            val dstRoot = "/data/local/tmp/jsonui-artifacts"
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val automation = instrumentation.uiAutomation
+            val dstRoot = ArtifactPaths.mirrorRoot(instrumentation.targetContext.packageName)
             Shell.exec(automation, "rm -rf $dstRoot/$suite")
             Shell.exec(automation, "mkdir -p $dstRoot")
             Shell.exec(automation, "cp -r ${src.absolutePath} $dstRoot/")

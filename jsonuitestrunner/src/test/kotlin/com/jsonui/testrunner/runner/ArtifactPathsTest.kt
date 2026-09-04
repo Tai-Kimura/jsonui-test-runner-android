@@ -40,6 +40,42 @@ class ArtifactPathsTest {
     }
 
     @Test
+    fun mirrorRootIsScopedByPackage() {
+        // The defect: one flat mirror root for every app on the device, so a
+        // second app's `artifacts pull --clean` pulled and deleted this app's
+        // runs. The package segment is what gives the CLI something to scope on.
+        assertEquals(
+            "/data/local/tmp/jsonui-artifacts/com.example.app",
+            ArtifactPaths.mirrorRoot("com.example.app")
+        )
+        assertEquals(
+            "/data/local/tmp/jsonui-artifacts/com.example.app.dev",
+            ArtifactPaths.mirrorRoot("com.example.app.dev")
+        )
+    }
+
+    @Test
+    fun mirrorRootForTwoAppsNeverCollides() {
+        // Control for the test above: two apps must land in two roots, or the
+        // segment is decoration.
+        val a = ArtifactPaths.mirrorRoot("com.example.client")
+        val b = ArtifactPaths.mirrorRoot("com.example.bar")
+        assert(a != b) { "$a == $b" }
+        assert(a.startsWith(ArtifactPaths.MIRROR_BASE + "/") && b.startsWith(ArtifactPaths.MIRROR_BASE + "/"))
+    }
+
+    @Test
+    fun mirrorRootSanitizesAHostilePackageName() {
+        // The root is fed to `rm -rf $root/$suite` through the shell, so a
+        // package name must not be able to traverse out of the base.
+        assertEquals(
+            "/data/local/tmp/jsonui-artifacts/.._.._etc",
+            ArtifactPaths.mirrorRoot("../../etc")
+        )
+        assertEquals("/data/local/tmp/jsonui-artifacts/unknown", ArtifactPaths.mirrorRoot(""))
+    }
+
+    @Test
     fun pathTraversalNamesCannotEscapeRoot() {
         // '/' is sanitized to '_' so multi-segment names collapse into one segment
         assertEquals(".._.._etc", ArtifactPaths.sanitize("../../etc"))

@@ -45,4 +45,27 @@ object ArtifactPaths {
     /** `<root>/<testName>/<caseName>/recording.mp4` */
     fun recordingFile(root: File, testName: String, caseName: String): File =
         File(caseDir(root, testName, caseName), "recording.mp4")
+
+    /**
+     * Where this app's artifacts are mirrored so they survive the post-run
+     * uninstall: `/data/local/tmp/jsonui-artifacts/<package>`.
+     *
+     * The package segment is the whole point. The mirror lives OUTSIDE the
+     * app-specific dir on purpose (that is what makes it survive uninstall),
+     * and until 1.8.9 it was a single flat root shared by every app on the
+     * device. On a shared emulator one app's `jsonui-test artifacts pull
+     * --clean` then pulled — and deleted — the other app's artifacts, because
+     * nothing in the path said whose they were. Consumer report 2026-09-04:
+     * 74 directories / 71 MB of one app's runs removed by the other app's
+     * clean, with `--serial` unable to help since serial narrows the device,
+     * not the app.
+     *
+     * Sanitized like every other segment so a hostile package name cannot
+     * traverse out of the root.
+     */
+    fun mirrorRoot(packageName: String): String =
+        "$MIRROR_BASE/${sanitize(packageName)}"
+
+    /** Flat root that pre-1.8.9 drivers mirrored into, kept for the CLI's legacy read path. */
+    const val MIRROR_BASE = "/data/local/tmp/jsonui-artifacts"
 }
