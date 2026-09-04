@@ -458,7 +458,8 @@ class ActionExecutor(
         // either sheet: the option list (SelectBox) or the wheel picker's Done
         // button (DateSelectBox). The fixed sleep made the failure text's
         // "within ${timeout}ms" a lie about how long it had actually looked.
-        val deadline = System.currentTimeMillis() + timeout
+        val tappedAt = System.currentTimeMillis()
+        val deadline = tappedAt + timeout
         var optionList: UiObject2? = null
         var doneButton: UiObject2? = null
         while (true) {
@@ -469,6 +470,16 @@ class ActionExecutor(
             if (System.currentTimeMillis() >= deadline) break
             Thread.sleep(100)
         }
+        // One line per selectOption so a consumer can separate the two 1.8.10
+        // remedies: the scroll-target settle wait and this poll replacing a
+        // fixed 300 ms sleep. If, with targets settled, the sheet always shows
+        // within 300 ms, the old sleep would have sufficed and the settle wait
+        // did the work; latencies above 300 ms mean the poll contributes.
+        println(
+            "[ActionExecutor] selectOption '$id': sheet " +
+                (if (optionList != null || doneButton != null) "appeared" else "did not appear") +
+                " after ${System.currentTimeMillis() - tappedAt}ms (timeout ${timeout}ms)"
+        )
 
         if (optionList != null) {
             // Regular SelectBox with option list
