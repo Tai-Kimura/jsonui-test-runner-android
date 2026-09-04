@@ -451,12 +451,24 @@ class ActionExecutor(
 
         // Step 1: Tap the SelectBox/DateSelectBox to open the bottom sheet
         val selectBox = waitForElement(id, timeout)
+        val tapPoint = selectBox.visibleCenter
         selectBox.click()
-        Thread.sleep(300) // Wait for bottom sheet animation
 
-        // Step 2: Check if it's a DateSelectBox (wheel picker) or regular SelectBox
-        val optionList = device.findObject(By.res("kjui_x7q_optionList"))
-        val doneButton = device.findObject(By.res("kjui_x7q_done"))
+        // Step 2: wait — up to the step's timeout, not a fixed 300 ms — for
+        // either sheet: the option list (SelectBox) or the wheel picker's Done
+        // button (DateSelectBox). The fixed sleep made the failure text's
+        // "within ${timeout}ms" a lie about how long it had actually looked.
+        val deadline = System.currentTimeMillis() + timeout
+        var optionList: UiObject2? = null
+        var doneButton: UiObject2? = null
+        while (true) {
+            optionList = device.findObject(By.res("kjui_x7q_optionList"))
+            if (optionList != null) break
+            doneButton = device.findObject(By.res("kjui_x7q_done"))
+            if (doneButton != null) break
+            if (System.currentTimeMillis() >= deadline) break
+            Thread.sleep(100)
+        }
 
         if (optionList != null) {
             // Regular SelectBox with option list
@@ -465,7 +477,16 @@ class ActionExecutor(
             // DateSelectBox with wheel picker
             selectFromDatePicker(step, timeout)
         } else {
-            throw AssertionError("Neither option list nor date picker appeared within ${timeout}ms")
+            // Name what the tap hit: how much of the target was on screen and
+            // what clipped it (consumer capture 2026-09-04: 23% of the target
+            // inside the viewport at its top edge). A tap on a sliver of a
+            // target that is still sliding is cancelled by Compose when the
+            // release lands outside the node — the geometry is what separates
+            // that from "tapped squarely and nothing opened".
+            throw AssertionError(
+                "Neither option list nor date picker appeared within ${timeout}ms " +
+                    "after tapping '$id' at (${tapPoint.x}, ${tapPoint.y}); " + describeTarget(id)
+            )
         }
     }
 
@@ -599,7 +620,10 @@ class ActionExecutor(
         val direction = step.direction ?: "down"
         val timeout = step.timeout?.toLong() ?: 20000L
 
-        if (device.findObject(By.res(id)) != null) return
+        if (device.findObject(By.res(id)) != null) {
+            awaitTargetSettled(id)
+            return
+        }
 
         // Resolve the scrollable container: explicit id, else the app-under-test
         // window bounds so fallback swipes stay ON the app surface (a fixed
@@ -627,14 +651,20 @@ class ActionExecutor(
         // a down-only search then ran to the bottom while the target sat just
         // ABOVE the viewport (intermittent by a few px of scroll position).
         if (searchInDirection(step.container, containerBounds, id, direction,
-                System.currentTimeMillis() + timeout)) return
+                System.currentTimeMillis() + timeout)) {
+            awaitTargetSettled(id)
+            return
+        }
 
         // Reverse leg: grant it a real budget even when the primary leg burned
         // the step timeout scrolling a long page to its end (bounded: at most
         // one extra half-timeout).
         val reverse = oppositeDirection(direction)
         if (searchInDirection(step.container, containerBounds, id, reverse,
-                System.currentTimeMillis() + maxOf(timeout / 2, 6000L))) return
+                System.currentTimeMillis() + maxOf(timeout / 2, 6000L))) {
+            awaitTargetSettled(id)
+            return
+        }
 
         throw AssertionError(
             "Element '$id' not found after scrolling to both ends " +
@@ -824,28 +854,6 @@ class ActionExecutor(
             "up", "left" -> android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
             else -> return false
         }
-        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-
-        // BFS over a FRESH rootInActiveWindow comparing viewIdResourceName
-        // directly — findAccessibilityNodeInfosByViewId does NOT match
-        // Compose's raw testTag ids (measured: returns nothing for tags that
-        // By.res finds), so it would silently turn this whole path into dead
-        // code that always falls back to gestures.
-        fun findByViewId(viewId: String): android.view.accessibility.AccessibilityNodeInfo? =
-            runCatching {
-                val root = automation.rootInActiveWindow ?: return@runCatching null
-                val queue = ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
-                queue.add(root)
-                while (queue.isNotEmpty()) {
-                    val node = queue.removeFirst()
-                    if (node.viewIdResourceName == viewId) return@runCatching node
-                    for (i in 0 until node.childCount) {
-                        node.getChild(i)?.let(queue::add)
-                    }
-                }
-                null
-            }.getOrNull()
-
         return runCatching {
             var guard = 0
             while (System.currentTimeMillis() < deadline && guard < 100) {
@@ -1038,6 +1046,84 @@ class ActionExecutor(
     }
 
     // Helper functions
+
+    /**
+     * BFS over a FRESH rootInActiveWindow comparing viewIdResourceName
+     * directly — findAccessibilityNodeInfosByViewId does NOT match Compose's
+     * raw testTag ids (measured: returns nothing for tags that By.res finds),
+     * so it would silently turn the a11y scroll path into dead code that
+     * always falls back to gestures.
+     */
+    private fun findByViewId(viewId: String): android.view.accessibility.AccessibilityNodeInfo? =
+        runCatching {
+            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            val root = automation.rootInActiveWindow ?: return@runCatching null
+            val queue = ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
+            queue.add(root)
+            while (queue.isNotEmpty()) {
+                val node = queue.removeFirst()
+                if (node.viewIdResourceName == viewId) return@runCatching node
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let(queue::add)
+                }
+            }
+            null
+        }.getOrNull()
+
+    /**
+     * Wait for a found scroll target to stop moving before the next step taps
+     * it. With a container given, scrollUntilVisible scrolls through the
+     * accessibility ACTION_SCROLL_FORWARD, which Compose animates and reports
+     * complete the moment it starts; the loop's waitForIdle runs BEFORE the
+     * lookup and waits on accessibility events Compose does not send under a
+     * bare UiAutomator (isEnabled=false, measured 2026-09-04). So the target
+     * could still be sliding when this returned, and a tap on it was
+     * cancelled by Compose when the release landed outside the node — with
+     * the press itself stopping the animation, parking the target where the
+     * failed tap caught it (consumer capture: 23% inside the viewport).
+     *
+     * Bounded by [TargetSettle.BUDGET_MS]; a target still moving after that
+     * is logged, not failed. One line is printed per call so a consumer can
+     * read whether targets ever move after being found (movement 0 on every
+     * line is the refutation of the mechanism above).
+     */
+    private fun awaitTargetSettled(id: String) {
+        val startedAt = System.currentTimeMillis()
+        val samples = mutableListOf<Box>()
+        while (System.currentTimeMillis() - startedAt < TargetSettle.BUDGET_MS) {
+            // Gone mid-animation (recomposed away): nothing to settle on.
+            val b = device.findObject(By.res(id))?.visibleBounds ?: break
+            samples.add(Box(b.left, b.top, b.right, b.bottom))
+            if (TargetSettle.settled(samples)) break
+            Thread.sleep(TargetSettle.SAMPLE_INTERVAL_MS)
+        }
+        println("[ActionExecutor] " + TargetSettle.settleLine(id, samples, System.currentTimeMillis() - startedAt))
+    }
+
+    /**
+     * Visible bounds, unclipped bounds and the nearest scrollable ancestor of
+     * [id], as one line for a failure message (see [TargetSettle.describe]).
+     */
+    private fun describeTarget(id: String): String {
+        val visible = device.findObject(By.res(id))?.visibleBounds
+            ?.let { Box(it.left, it.top, it.right, it.bottom) }
+        val node = findByViewId(id)
+        val full = node?.let { n -> Rect().also { n.getBoundsInScreen(it) } }
+            ?.let { Box(it.left, it.top, it.right, it.bottom) }
+        var clipper: Pair<String, Box>? = null
+        var ancestor = node?.parent
+        while (ancestor != null) {
+            val current: android.view.accessibility.AccessibilityNodeInfo = ancestor
+            if (current.isScrollable) {
+                val r = Rect()
+                current.getBoundsInScreen(r)
+                clipper = (current.viewIdResourceName ?: "<no id>") to Box(r.left, r.top, r.right, r.bottom)
+                break
+            }
+            ancestor = current.parent
+        }
+        return TargetSettle.describe(id, visible, full, clipper)
+    }
 
     /**
      * Wait for element to appear by id (using resource-id)

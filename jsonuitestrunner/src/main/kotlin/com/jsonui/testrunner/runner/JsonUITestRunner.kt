@@ -174,6 +174,9 @@ class JsonUITestRunner(
     private var currentCaseName = ""
 
     /** Per-case screen recorder (config.record); shell-uid `screenrecord`. */
+    /** Wall-clock start of the current case (set where its recording starts), for the recording sidecar. */
+    private var caseStartedAt = 0L
+
     private val screenRecorder by lazy {
         ScreenRecorder(InstrumentationRegistry.getInstrumentation().uiAutomation)
     }
@@ -1167,6 +1170,7 @@ class JsonUITestRunner(
 
     /** Start the per-case recording; failures are logged, never thrown. */
     private fun startCaseRecording(testName: String, caseName: String) {
+        caseStartedAt = System.currentTimeMillis()
         if (!config.record) return
         try {
             screenRecorder.start(
@@ -1181,19 +1185,42 @@ class JsonUITestRunner(
      * Stop the per-case recording. Passing cases discard the file unless
      * keepRecordingOnSuccess; failing cases always keep it. No-op when no
      * recording is running.
+     *
+     * A kept recording gets a `recording.json` beside it (case wall time,
+     * recorder start latency, finalised?) and a recording whose stop did not
+     * finalise is kept under `recording.truncated.mp4` — a consumer's
+     * 3 KB file with no moov atom sat next to good ones with the same name,
+     * and nothing distinguished "static screen, no frames" from "broken".
      */
     private fun finishCaseRecording(passed: Boolean) {
         if (!screenRecorder.isRecording) return
+        val caseDurationMs = System.currentTimeMillis() - caseStartedAt
         try {
-            val file = screenRecorder.stop()
+            val stopped = screenRecorder.stop()
             when {
-                file == null -> log("Recording did not finalize in time")
-                passed && !config.keepRecordingOnSuccess -> screenRecorder.discard(file)
-                else -> log("Recording saved: ${file.absolutePath}")
+                stopped == null -> log("No recording was running")
+                passed && !config.keepRecordingOnSuccess -> screenRecorder.discard(stopped.file)
+                else -> {
+                    val kept = if (stopped.finalized) stopped.file
+                    else screenRecorder.rename(stopped.file, RecordingSidecar.TRUNCATED_FILE_NAME)
+                    writeRecordingSidecar(kept, caseDurationMs, stopped.finalized)
+                    log(
+                        if (stopped.finalized) "Recording saved: ${kept.absolutePath}"
+                        else "Recording did not finalize in time; kept as ${kept.absolutePath}"
+                    )
+                }
             }
         } catch (e: Exception) {
             log("Failed to stop recording: ${e.message}")
         }
+    }
+
+    private fun writeRecordingSidecar(recording: java.io.File, caseDurationMs: Long, finalized: Boolean) {
+        runCatching {
+            java.io.File(recording.parentFile, RecordingSidecar.FILE_NAME).writeText(
+                RecordingSidecar.json(recording.name, caseDurationMs, screenRecorder.startLatencyMs, finalized)
+            )
+        }.onFailure { log("Failed to write recording sidecar: ${it.message}") }
     }
 
     private fun log(message: String) {
