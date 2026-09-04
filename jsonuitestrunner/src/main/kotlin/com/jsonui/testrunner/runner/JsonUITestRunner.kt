@@ -284,7 +284,7 @@ class JsonUITestRunner(
                 requireMockClient("mocks").scenarioSet(mocks)
             } catch (e: Exception) {
                 val failed = test.cases.map {
-                    TestResult(test.metadata.name, it.name, passed = false, error = e.message, durationMs = 0)
+                    TestResult(test.metadata.name, it.name, passed = false, error = e.message, failureReason = FailureClassifier.wireValue(e), durationMs = 0)
                 }
                 return TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
             }
@@ -299,7 +299,7 @@ class JsonUITestRunner(
             test.launch?.let { applyLaunchState(it) }
         } catch (e: LaunchConfigException) {
             val failed = test.cases.map {
-                TestResult(test.metadata.name, it.name, passed = false, error = e.message, durationMs = 0)
+                TestResult(test.metadata.name, it.name, passed = false, error = e.message, failureReason = FailureClassifier.wireValue(e), durationMs = 0)
             }
             val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
             writeResultsIfNeeded(suiteResult)
@@ -360,6 +360,7 @@ class JsonUITestRunner(
                     caseName = testCase.name,
                     passed = false,
                     error = "setup failed: $setupError",
+                    failureReason = FailureReason.SETUP.wireValue,
                     durationMs = 0
                 ))
                 continue
@@ -387,6 +388,10 @@ class JsonUITestRunner(
                     caseName = "teardown",
                     passed = false,
                     error = e.message,
+                    // The STAGE, not what threw: a teardown failure is a
+                    // teardown failure whatever exception carried it, and it
+                    // says nothing about the behaviour under test.
+                    failureReason = FailureReason.TEARDOWN.wireValue,
                     durationMs = 0
                 ))
             }
@@ -446,7 +451,7 @@ class JsonUITestRunner(
             try {
                 requireMockClient("mocks").scenarioSet(mocks)
             } catch (e: Exception) {
-                val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, durationMs = 0))
+                val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, failureReason = FailureClassifier.wireValue(e), durationMs = 0))
                 val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
                 writeResultsIfNeeded(suiteResult)
                 return suiteResult
@@ -461,7 +466,7 @@ class JsonUITestRunner(
         try {
             test.launch?.let { applyLaunchState(it) }
         } catch (e: LaunchConfigException) {
-            val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, durationMs = 0))
+            val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, failureReason = FailureClassifier.wireValue(e), durationMs = 0))
             val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
             writeResultsIfNeeded(suiteResult)
             return suiteResult
@@ -545,6 +550,10 @@ class JsonUITestRunner(
                     caseName = "teardown",
                     passed = false,
                     error = e.message,
+                    // The STAGE, not what threw: a teardown failure is a
+                    // teardown failure whatever exception carried it, and it
+                    // says nothing about the behaviour under test.
+                    failureReason = FailureReason.TEARDOWN.wireValue,
                     durationMs = 0
                 ))
             }
@@ -612,6 +621,7 @@ class JsonUITestRunner(
                 caseName = testCase.name,
                 passed = false,
                 error = e.message,
+                failureReason = FailureClassifier.wireValue(e),
                 warnings = currentWarnings.toList(),
                 durationMs = System.currentTimeMillis() - startTime
             )

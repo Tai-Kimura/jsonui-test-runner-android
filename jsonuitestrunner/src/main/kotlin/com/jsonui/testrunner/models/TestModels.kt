@@ -302,6 +302,14 @@ data class TestResult(
      * skipReason); null for plain `skip: true` skips and non-skipped results.
      */
     val skipReason: String? = null,
+    /**
+     * Machine-readable counterpart to [error], which is prose and changes
+     * between releases (results.schema.json failureReason). Only meaningful
+     * when the case failed; null elsewhere, and null on a failure whose cause
+     * could not be classified at all — absent reads as unknown, never as
+     * "no reason".
+     */
+    val failureReason: String? = null,
     /** Warnings recorded during the case (optional-step failures, baseline created, ...) */
     val warnings: List<String> = emptyList(),
     /**

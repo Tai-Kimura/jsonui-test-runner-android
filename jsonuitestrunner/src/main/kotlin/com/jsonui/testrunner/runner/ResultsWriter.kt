@@ -48,6 +48,13 @@ object ResultsWriter {
                             else -> "failed"
                         })
                         result.error?.let { put("error", it) }
+                        // Machine-readable half of the same fact. Only on a
+                        // failed row: the validator rejects it elsewhere, and
+                        // a skipped row carrying one would claim a failure it
+                        // never had.
+                        if (!result.skipped && !result.passed) {
+                            result.failureReason?.let { put("failureReason", it) }
+                        }
                         // Distinct gate-skip reasons (platform vs responsive) keep
                         // responsive tests from becoming write-only green skips.
                         result.skipReason?.let { put("skipReason", it) }
