@@ -287,7 +287,7 @@ class JsonUITestRunner(
                 requireMockClient("mocks").scenarioSet(mocks)
             } catch (e: Exception) {
                 val failed = test.cases.map {
-                    TestResult(test.metadata.name, it.name, passed = false, error = e.message, failureReason = FailureClassifier.wireValue(e), durationMs = 0)
+                    TestResult(test.metadata.name, it.name, passed = false, error = describeFailure(e), failureReason = FailureClassifier.wireValue(e), durationMs = 0)
                 }
                 return TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
             }
@@ -302,7 +302,7 @@ class JsonUITestRunner(
             test.launch?.let { applyLaunchState(it) }
         } catch (e: LaunchConfigException) {
             val failed = test.cases.map {
-                TestResult(test.metadata.name, it.name, passed = false, error = e.message, failureReason = FailureClassifier.wireValue(e), durationMs = 0)
+                TestResult(test.metadata.name, it.name, passed = false, error = describeFailure(e), failureReason = FailureClassifier.wireValue(e), durationMs = 0)
             }
             val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
             writeResultsIfNeeded(suiteResult)
@@ -327,7 +327,7 @@ class JsonUITestRunner(
                 executeSteps(setup, warnings)
             } catch (e: Throwable) {
                 rethrowIfFatal(e)
-                setupError = e.message ?: e.toString()
+                setupError = describeFailure(e)
                 log("Setup failed: $setupError")
             }
         }
@@ -390,7 +390,7 @@ class JsonUITestRunner(
                     testName = test.metadata.name,
                     caseName = "teardown",
                     passed = false,
-                    error = e.message,
+                    error = describeFailure(e),
                     // The STAGE, not what threw: a teardown failure is a
                     // teardown failure whatever exception carried it, and it
                     // says nothing about the behaviour under test.
@@ -454,7 +454,7 @@ class JsonUITestRunner(
             try {
                 requireMockClient("mocks").scenarioSet(mocks)
             } catch (e: Exception) {
-                val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, failureReason = FailureClassifier.wireValue(e), durationMs = 0))
+                val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = describeFailure(e), failureReason = FailureClassifier.wireValue(e), durationMs = 0))
                 val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
                 writeResultsIfNeeded(suiteResult)
                 return suiteResult
@@ -469,7 +469,7 @@ class JsonUITestRunner(
         try {
             test.launch?.let { applyLaunchState(it) }
         } catch (e: LaunchConfigException) {
-            val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = e.message, failureReason = FailureClassifier.wireValue(e), durationMs = 0))
+            val failed = listOf(TestResult(test.metadata.name, "flow", passed = false, error = describeFailure(e), failureReason = FailureClassifier.wireValue(e), durationMs = 0))
             val suiteResult = TestSuiteResult(test.metadata.name, failed, System.currentTimeMillis() - startTime)
             writeResultsIfNeeded(suiteResult)
             return suiteResult
@@ -514,7 +514,7 @@ class JsonUITestRunner(
                 finishCaseRecording(passed = true)
             } catch (e: Throwable) {
                 rethrowIfFatal(e)
-                flowError = e.message ?: e.toString()
+                flowError = describeFailure(e)
                 log("Flow test failed: $flowError")
                 finishCaseRecording(passed = false)
                 // Parity with screen-test cases (and iOS/web flows): capture the
@@ -552,7 +552,7 @@ class JsonUITestRunner(
                     testName = test.metadata.name,
                     caseName = "teardown",
                     passed = false,
-                    error = e.message,
+                    error = describeFailure(e),
                     // The STAGE, not what threw: a teardown failure is a
                     // teardown failure whatever exception carried it, and it
                     // says nothing about the behaviour under test.
@@ -589,6 +589,11 @@ class JsonUITestRunner(
         if (t is VirtualMachineError) throw t
     }
 
+    /** Where execution is, for a failure message that can name the step. */
+    private val stepTrail = StepTrail()
+
+    private fun describeFailure(t: Throwable): String = stepTrail.describe(t)
+
     private fun runTestCase(testName: String, testCase: TestCase): TestResult {
         val startTime = System.currentTimeMillis()
         log("Running case: ${testCase.name}")
@@ -623,7 +628,7 @@ class JsonUITestRunner(
                 testName = testName,
                 caseName = testCase.name,
                 passed = false,
-                error = e.message,
+                error = describeFailure(e),
                 failureReason = FailureClassifier.wireValue(e),
                 warnings = currentWarnings.toList(),
                 durationMs = System.currentTimeMillis() - startTime
@@ -634,20 +639,25 @@ class JsonUITestRunner(
     private fun executeSteps(steps: List<TestStep>, warnings: MutableList<String>) {
         for ((index, step) in steps.withIndex()) {
             log("  Step ${index + 1}: ${stepDescription(step)}")
-            executeStepGuarded(step, warnings)
+            stepTrail.inFrame(StepTrail.frame("step", index, steps.size, step.label, stepDescription(step))) {
+                executeStepGuarded(step, warnings)
+            }
         }
     }
 
     private fun executeFlowSteps(steps: List<FlowTestStep>, warnings: MutableList<String>) {
         for ((index, step) in steps.withIndex()) {
-            if (step.isFileReference) {
-                log("  Flow step ${index + 1}: file=${step.file}")
-            } else if (step.isBlockStep) {
-                log("  Flow step ${index + 1}: block=${step.block}")
-            } else {
-                log("  Flow step ${index + 1}: screen=${step.screen}")
+            val detail = when {
+                step.isFileReference -> "file=${step.file}"
+                step.isBlockStep -> "block=${step.block}"
+                step.action != null || step.assert != null ->
+                    "screen=${step.screen ?: "-"}, ${stepDescription(step.toTestStep())}"
+                else -> "screen=${step.screen ?: "-"}"
             }
-            executeFlowStep(step, warnings)
+            log("  Flow step ${index + 1}: $detail")
+            stepTrail.inFrame(StepTrail.frame("flow step", index, steps.size, step.label, detail)) {
+                executeFlowStep(step, warnings)
+            }
         }
     }
 
@@ -878,8 +888,11 @@ class JsonUITestRunner(
     private fun executeBlockStep(step: FlowTestStep, warnings: MutableList<String>) {
         val blockSteps = step.steps ?: return
         log("    Executing block: ${step.block}")
-        for (innerStep in blockSteps) {
-            executeStepGuarded(innerStep.toTestStep(), warnings)
+        for ((index, innerStep) in blockSteps.withIndex()) {
+            val inner = innerStep.toTestStep()
+            stepTrail.inFrame(StepTrail.frame("in block", index, blockSteps.size, innerStep.label, stepDescription(inner))) {
+                executeStepGuarded(inner, warnings)
+            }
         }
     }
 
