@@ -10,6 +10,7 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
@@ -41,6 +42,9 @@ class ActionExecutor(
      */
     var variableStore: MutableMap<String, String>? = null
 
+    /** How many times a find-then-act is re-run when the handle goes stale. */
+    private val STALE_RETRY_ATTEMPTS = 3
+
     /** Sink for non-fatal warnings (e.g. no-op action stubs), set by the runner */
     var warningHandler: ((String) -> Unit)? = null
 
@@ -53,9 +57,56 @@ class ActionExecutor(
     var mediaFixturesDir: File? = null
 
     /**
-     * Execute an action step
+     * Execute an action step, re-finding once the tree moves under us.
+     *
+     * Every action here is find-then-act: `waitForElement(id, timeout)`
+     * returns a handle, and the interaction happens on that handle. If a
+     * Compose recomposition swaps the node in between, uiautomator throws
+     * `StaleObjectException` and the whole flow died -- a test measuring the
+     * timing of a subtree swap rather than the app. `main` contained the
+     * string `StaleObject` exactly zero times: nothing caught it anywhere.
+     *
+     * The retry is here, at the dispatch, rather than at each of the fifteen
+     * `waitForElement` call sites, because a fix applied per-site reaches
+     * only the sites someone remembered. One place covers all of them and
+     * cannot drift out of step with a new action added later.
+     *
+     * ⚠️ Retrying re-runs the WHOLE action, so an action that had already
+     * done something before going stale would repeat that part. This is
+     * acceptable for the exception being caught, and only for it: uiautomator
+     * raises `StaleObjectException` when the node backing the handle is gone
+     * BEFORE the interaction is delivered, so the interaction did not land.
+     * A stale thrown by a multi-interaction action (`selectOption` opens a
+     * sheet, then picks) restarts that action from its own first find, which
+     * is the recovery its own retry-on-no-change already assumes.
+     *
+     * Bounded and logged: three attempts inside the step's own timeout, and
+     * each retry says so, so "the tree is moving under this test" stays
+     * visible instead of being smoothed away.
      */
     fun execute(step: TestStep) {
+        var stale: StaleObjectException? = null
+        repeat(STALE_RETRY_ATTEMPTS) { attempt ->
+            try {
+                executeOnce(step)
+                return
+            } catch (e: StaleObjectException) {
+                stale = e
+                warningHandler?.invoke(
+                    "stale element on '${step.action}' id=${step.id ?: "-"}; " +
+                        "re-finding (attempt ${attempt + 2}/$STALE_RETRY_ATTEMPTS)"
+                )
+            }
+        }
+        throw AssertionError(
+            "Element for '${step.action}' id=${step.id ?: "-"} went stale on every one of " +
+                "$STALE_RETRY_ATTEMPTS attempts -- the node backing it is being replaced faster " +
+                "than it can be acted on",
+            stale
+        )
+    }
+
+    private fun executeOnce(step: TestStep) {
         val action = step.action ?: throw IllegalArgumentException("Step has no action")
         val timeout = step.timeout?.toLong() ?: defaultTimeout
 
