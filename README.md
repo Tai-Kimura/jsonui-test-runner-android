@@ -194,9 +194,22 @@ states deterministically:
 ```kotlin
 val config = TestRunnerConfig(
     mockServerUrl = "http://10.0.2.2:8790", // host machine from the emulator
-    mockToken = System.getenv("JSONUI_MOCK_TOKEN")
+    mockToken = System.getenv("JSONUI_MOCK_TOKEN"),
+    // Where to write the standardized results JSON. **Unset means the runner
+    // computes the per-case record and throws it away** — the orientation the
+    // case actually ran in, attempts, flaky and skipped all live here and
+    // nowhere else. The run still passes or fails normally without it; you
+    // just cannot answer "did this case run in the orientation it declared?"
+    resultsPath = File(
+        InstrumentationRegistry.getInstrumentation().targetContext
+            .getExternalFilesDir(null),
+        "jsonui-results.json"
+    )
 )
 ```
+
+The runner prints a NOTICE once per run when `resultsPath` is unset, because
+"your results were discarded" is not something a debug flag should hide.
 
 - A screen test's root `mocks` is applied and the app relaunched before the cases
   run (per-file scenario selection; split normal/empty/error into separate files).

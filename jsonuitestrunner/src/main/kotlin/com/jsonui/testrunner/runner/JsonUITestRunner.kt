@@ -1,6 +1,7 @@
 package com.jsonui.testrunner.runner
 
 import androidx.test.platform.app.InstrumentationRegistry
+import com.jsonui.testrunner.models.RunDefaultsSource
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import com.jsonui.testrunner.actions.ActionExecutor
@@ -9,6 +10,8 @@ import com.jsonui.testrunner.assertions.AssertionExecutor
 import com.jsonui.testrunner.models.FlowTest
 import com.jsonui.testrunner.models.FlowTestStep
 import com.jsonui.testrunner.models.LaunchConfig
+import com.jsonui.testrunner.models.RunNotices
+import com.jsonui.testrunner.models.RunOrientationFloor
 import com.jsonui.testrunner.models.ResponsiveCondition
 import com.jsonui.testrunner.models.ResponsiveThresholds
 import com.jsonui.testrunner.models.ScreenTest
@@ -872,18 +875,70 @@ class JsonUITestRunner(
     private var declaredOrientation: String? = null
 
     /**
-     * Resolve and apply the orientation this run starts in, once.
+     * The orientation this process observed before it applied anything.
      *
-     * Order: the file's own `orientation`, else the run default for the tier
-     * this device falls in. A `setOrientation` step later beats both, which
-     * is why this runs only at the start. The tier comes from the LIVE
-     * window, not from anything installed: the whole reason the default is a
-     * table is that one bundle runs on several form factors.
+     * 🚨 THE FLOOR. `setOrientation` is absolute from driver 1.12.0, so a
+     * single case that rotates the device leaves every later case in that
+     * orientation — there is nothing to come back to unless a run default is
+     * declared, and most faces declare none. Measured 2026-09-08 on a
+     * consumer's tablet lane: 76 cases ran in an orientation nobody chose,
+     * against the AVD's own `hw.initialOrientation=landscape`.
+     *
+     * ⚠️ Captured ONCE, from the first case, before any rotation. Re-reading
+     * it later would capture whatever the last `setOrientation` left, which
+     * is the state this exists to undo.
+     */
+    // Process-scoped: see RunOrientationFloor for why an instance field could
+    // never fire (the runner is new for every test, so capture and comparison
+    // landed in the same call).
+    private val runStartOrientation: String?
+        get() = RunOrientationFloor.current()
+
+    /**
+     * Resolve and apply the orientation this run starts in, once per file.
+     *
+     * Order: the file's own `orientation`, else the run default for this
+     * device's tier, else THE ORIENTATION THE RUN STARTED IN. A
+     * `setOrientation` step beats all three for the cases that follow it,
+     * which is why this runs at the start of each file — restoring the floor
+     * is what keeps one case's rotation from leaking into the next.
+     *
+     * 🚨 The tier here is resolved from `smallestWidth`, NOT the current
+     * window width, and that difference is the whole point. One function was
+     * answering two questions:
+     *
+     *     "what window is this drawn in?"  responsive gating — current width
+     *                                      is RIGHT, it must move with rotation
+     *     "which device is this lane?"     run orientation — current width is
+     *                                      WRONG, it must NOT move with rotation
+     *
+     * Measured by the reporting lane: a tablet at 1280x800dp resolves
+     * `regular` in landscape and `medium` in portrait, so a face that wrote
+     * `{"regular": "landscape"}` failed to match at exactly the moment it
+     * wanted to — the device was portrait. And a phone at 411x914dp resolves
+     * `regular` once rotated, matching the tablet's row and pinning itself
+     * landscape. `smallestWidth` is orientation-invariant and is the same
+     * measure Android's own `sw600dp` resource qualifier uses, so it names
+     * the device rather than the moment.
+     *
+     * ⚠️ This shifts a boundary: a 1280x800dp tablet is `medium` under
+     * `smallestWidth` where it was `regular` in landscape before. A face that
+     * declared only `regular` will stop matching — for a different reason
+     * than before, but it will still stop. That is why the floor above exists
+     * independently: it does not depend on any declaration matching.
      */
     private fun applyRunOrientation(declared: String?) {
         val size = currentWindowSizeDp()
-        val tier = resolveSizeTier(size.width, config.responsive)
-        val wanted = declared ?: RunDefaultsLoader.forTier(config.runDefaults, tier)
+        RunOrientationFloor.captureOnce(observeOrientation())
+        val tier = resolveSizeTier(minOf(size.width, size.height), config.responsive)
+        // ⚠️ `config.runDefaults` first so a face that sets it explicitly
+        // still wins; the sidecar is the fallback, not an override. Until
+        // 1.13.0 nothing filled either, so this whole line resolved to the
+        // floor every time — see RunDefaultsSource for the measurement.
+        val defaults = config.runDefaults ?: RunDefaultsSource.forThisProcess()
+        val wanted = declared
+            ?: RunDefaultsLoader.forTier(defaults, tier)
+            ?: runStartOrientation
         declaredOrientation = wanted
         if (wanted == null) return
         if (observeOrientation() == wanted) {
@@ -1195,7 +1250,22 @@ class JsonUITestRunner(
     // MARK: - Results Output
 
     private fun writeResultsIfNeeded(suite: TestSuiteResult) {
-        val path = config.resultsPath ?: return
+        val path = config.resultsPath
+        if (path == null) {
+            // ⚠️ NOT `log()` — that is gated by `verbose`, whose default is
+            // false, so the default configuration would say this to nobody.
+            // A face silently losing its machine-readable results is exactly
+            // the state that needs saying out loud.
+            RunNotices.once(
+                "no-results-path",
+                "resultsPath is not set, so no results JSON is written — the " +
+                    "per-case orientation pair (declaredOrientation / " +
+                    "observedOrientation), attempts, flaky and skipped records " +
+                    "are computed and then discarded. Set TestRunnerConfig." +
+                    "resultsPath to keep them."
+            )
+            return
+        }
         runCatching {
             ResultsWriter.write(
                 suites = listOf(suite),
