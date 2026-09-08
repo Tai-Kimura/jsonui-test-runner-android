@@ -4,6 +4,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import com.jsonui.testrunner.actions.ActionExecutor
+import com.jsonui.testrunner.actions.OrientationCommand
 import com.jsonui.testrunner.assertions.AssertionExecutor
 import com.jsonui.testrunner.models.FlowTest
 import com.jsonui.testrunner.models.FlowTestStep
@@ -17,7 +18,9 @@ import com.jsonui.testrunner.models.TestResult
 import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.models.TestSuiteResult
 import com.jsonui.testrunner.models.WindowDimensions
+import com.jsonui.testrunner.models.deriveOrientation
 import com.jsonui.testrunner.models.matchesResponsive
+import com.jsonui.testrunner.models.resolveSizeTier
 
 /**
  * Configuration for the test runner
@@ -84,7 +87,17 @@ data class TestRunnerConfig(
      * regular ≥ 840dp). Override only for projects that also override the
      * renderer's breakpoints; bucket names themselves are not configurable.
      */
-    val responsive: ResponsiveThresholds = ResponsiveThresholds()
+    val responsive: ResponsiveThresholds = ResponsiveThresholds(),
+    /**
+     * Run-scoped defaults read from the installed bundle's
+     * `jsonui-test-run.json` (see [RunDefaultsLoader]). Null says the sidecar
+     * could not be read and is NOT the same as an empty table: a caller that
+     * folds the two together loses the only signal separating "no default
+     * declared" from "installed by an older CLI" — and on this driver there
+     * is no other, because no Android driver version is readable from a
+     * project tree for `x-requires-driver` to gate on.
+     */
+    val runDefaults: RunDefaults? = null
 )
 
 /** Safety cap for `repeat` with a `while` condition and no `times` */
@@ -232,6 +245,11 @@ class JsonUITestRunner(
     fun runScreenTest(test: ScreenTest, testPath: String = ""): TestSuiteResult {
         val results = mutableListOf<TestResult>()
         val startTime = System.currentTimeMillis()
+
+        // Orientation first: a screen that renders at one size and is then
+        // rotated has already made its layout decisions, so a run that
+        // rotates afterwards is not the run the file asked for.
+        applyRunOrientation(test.orientation)
 
         // Wait for UI to be ready (app may need time to render)
         // Compose UI needs extra time for semantics tree to be built
@@ -446,6 +464,10 @@ class JsonUITestRunner(
             }
         }
 
+        // Same ordering argument as the screen path: rotate before anything
+        // renders, not after.
+        applyRunOrientation(test.orientation)
+
         // Apply the file-level mock scenario set BEFORE the app fetches.
         // Parity with runScreenTest (§8.1); a failure here fails the flow
         // rather than silently running the default scenario. The relaunch that
@@ -531,7 +553,7 @@ class JsonUITestRunner(
             }
         } while (flowError != null && flowAttempts < maxAttempts)
 
-        results.add(TestResult(
+        results.add(stampOrientation(TestResult(
             testName = test.metadata.name,
             caseName = "flow",
             passed = flowError == null,
@@ -539,7 +561,7 @@ class JsonUITestRunner(
             warnings = flowWarnings.toList(),
             durationMs = System.currentTimeMillis() - startTime,
             attempts = flowAttempts
-        ))
+        )))
 
         // Teardown (guaranteed), runs even when the flow body failed
         test.teardown?.let { teardown ->
@@ -609,13 +631,13 @@ class JsonUITestRunner(
         return try {
             executeSteps(processedCase.steps, currentWarnings)
             finishCaseRecording(passed = true)
-            TestResult(
+            stampOrientation(TestResult(
                 testName = testName,
                 caseName = testCase.name,
                 passed = true,
                 warnings = currentWarnings.toList(),
                 durationMs = System.currentTimeMillis() - startTime
-            )
+            ))
         } catch (e: Throwable) {
             rethrowIfFatal(e)
             log("Case ${testCase.name} failed: ${e.message}")
@@ -624,7 +646,7 @@ class JsonUITestRunner(
                 takeScreenshot("failure")
             }
             saveHierarchyDump()
-            TestResult(
+            stampOrientation(TestResult(
                 testName = testName,
                 caseName = testCase.name,
                 passed = false,
@@ -632,7 +654,7 @@ class JsonUITestRunner(
                 failureReason = FailureClassifier.wireValue(e),
                 warnings = currentWarnings.toList(),
                 durationMs = System.currentTimeMillis() - startTime
-            )
+            ))
         }
     }
 
@@ -704,7 +726,17 @@ class JsonUITestRunner(
         }
 
         when {
-            step.isAction -> actionExecutor.execute(step)
+            step.isAction -> {
+                actionExecutor.execute(step)
+                // A `setOrientation` step is the top of the precedence chain,
+                // so what the run DECLARES changes here. Taken from the step
+                // rather than re-measured: this half of the pair is the
+                // request, and measuring it would collapse it onto the
+                // observed half.
+                if (step.action == "setOrientation" && step.orientation != null) {
+                    declaredOrientation = step.orientation
+                }
+            }
             step.isAssertion -> assertionExecutor.execute(step)
             else -> throw IllegalArgumentException("Step must have either 'action' or 'assert'")
         }
@@ -830,6 +862,97 @@ class JsonUITestRunner(
         }
         return WindowDimensions((widthPx / density).toInt(), (heightPx / density).toInt())
     }
+
+    /**
+     * The orientation the run asked for, after resolving file > run default;
+     * a `setOrientation` step overwrites it for the cases that follow, which
+     * is what makes it the DECLARED value rather than the configured one.
+     * Null means nothing declared an orientation at all.
+     */
+    private var declaredOrientation: String? = null
+
+    /**
+     * Resolve and apply the orientation this run starts in, once.
+     *
+     * Order: the file's own `orientation`, else the run default for the tier
+     * this device falls in. A `setOrientation` step later beats both, which
+     * is why this runs only at the start. The tier comes from the LIVE
+     * window, not from anything installed: the whole reason the default is a
+     * table is that one bundle runs on several form factors.
+     */
+    private fun applyRunOrientation(declared: String?) {
+        val size = currentWindowSizeDp()
+        val tier = resolveSizeTier(size.width, config.responsive)
+        val wanted = declared ?: RunDefaultsLoader.forTier(config.runDefaults, tier)
+        declaredOrientation = wanted
+        if (wanted == null) return
+        if (observeOrientation() == wanted) {
+            log("[orientation] already '$wanted' - nothing to apply")
+            return
+        }
+        log("[orientation] applying run orientation '$wanted' (tier $tier)")
+        when (OrientationCommand.forOrientation(wanted)) {
+            OrientationCommand.PORTRAIT -> device.setOrientationPortrait()
+            OrientationCommand.LANDSCAPE -> device.setOrientationLandscape()
+            null -> {
+                // The CLI validates this value before it can reach a device,
+                // so arriving here means a hand-edited bundle. Say so and
+                // leave the device alone rather than picking one.
+                log("[orientation] unknown orientation '$wanted' - not applied")
+                return
+            }
+        }
+        device.waitForIdle(config.defaultTimeout)
+        Thread.sleep(500) // rotation animation + Compose semantics settle
+    }
+
+    /**
+     * The orientation the run is in RIGHT NOW, measured.
+     *
+     * Deliberately not derived from [declaredOrientation]: the pair exists to
+     * record a disagreement, and a derived value can never disagree.
+     *
+     * Measured through the SAME two functions `responsive` gating uses —
+     * `currentWindowSizeDp()` and `deriveOrientation` — rather than through
+     * `device.displayWidth/Height` and a fresh comparison. Two reasons, and
+     * the second was nearly missed: the app window is not the display in
+     * multi-window, and this face's `deriveOrientation` treats a SQUARE
+     * window as portrait (`width > height`, the kjui renderer's rule) where
+     * the web driver treats it as landscape. Rolling a second comparison here
+     * would let one device be gated `portrait` by `responsive` and reported
+     * `landscape` in the results of the same run.
+     *
+     * The cross-face difference is pre-existing and is left alone: each face
+     * matches its own renderer, which is what makes `responsive` mean the
+     * same thing as the layout it gates.
+     */
+    private fun observeOrientation(): String? =
+        runCatching { deriveOrientation(currentWindowSizeDp()) }.getOrNull()
+
+    /**
+     * Stamp a result that actually RAN with the orientation pair.
+     *
+     * Skipped rows are not stamped, for the same reason they carry no
+     * `attempts`: a case that never executed has no orientation it ran in,
+     * and a display reading taken at skip time would look like one.
+     *
+     * MEASURED: this guard is REDUNDANT and no test can reach it. The
+     * load-bearing one is `ResultsWriter`'s `if (!result.skipped)`, which a
+     * JVM arm does cover (`neitherIsEmittedOnASkippedRow`); deleting the
+     * guard here turns nothing red, because constructing this class needs a
+     * `UiDevice` and so no unit test can call the method at all. It is kept
+     * as depth — a future consumer of `TestResult` that is not
+     * `ResultsWriter` would otherwise see a stamped skipped row — but it is
+     * written down as redundant rather than described as the thing that
+     * makes the behaviour true, which is what the earlier draft of this
+     * comment claimed and the mutation matrix disproved.
+     */
+    internal fun stampOrientation(result: TestResult): TestResult =
+        if (result.skipped) result
+        else result.copy(
+            declaredOrientation = declaredOrientation,
+            observedOrientation = observeOrientation()
+        )
 
     /**
      * The screen the previously executed inline step ran on; null means

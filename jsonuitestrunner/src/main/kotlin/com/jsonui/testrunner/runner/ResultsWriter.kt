@@ -63,6 +63,14 @@ object ResultsWriter {
                                 for (warning in result.warnings) add(JsonPrimitive(warning))
                             })
                         }
+                        // Both halves of the orientation pair, or neither.
+                        // A row carrying only the request would read as
+                        // agreement rather than as a missing measurement,
+                        // which is the shape the pair exists to prevent.
+                        if (!result.skipped) {
+                            result.declaredOrientation?.let { put("declaredOrientation", it) }
+                            result.observedOrientation?.let { put("observedOrientation", it) }
+                        }
                         // attempts = total runs (1 = settled first try); flaky
                         // only on a pass that needed retries — the validator
                         // rejects flaky on failures (results.schema.json).

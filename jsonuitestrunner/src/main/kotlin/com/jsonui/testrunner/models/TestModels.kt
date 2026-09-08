@@ -12,6 +12,13 @@ data class ScreenTest(
     val source: TestSource,
     val metadata: TestMetadata,
     val platform: PlatformTarget? = null,
+    /**
+     * Orientation this file runs in, applied once when the run starts.
+     * Overrides the run default from `jsonui-test-run.json`; a `setOrientation`
+     * step still wins for the rotation it performs, so the order is
+     * step > this field > run default.
+     */
+    val orientation: String? = null,
     val launch: LaunchConfig? = null,
     /** API mock scenario set applied (and the app relaunched) before the cases run */
     val mocks: Map<String, String>? = null,
@@ -68,6 +75,8 @@ data class FlowTest(
     val sources: List<FlowTestSource>? = null,  // Now optional (not needed when using file references)
     val metadata: TestMetadata,
     val platform: PlatformTarget? = null,
+    /** See [ScreenTest.orientation] — same field, same precedence. */
+    val orientation: String? = null,
     val launch: LaunchConfig? = null,
     val initialState: FlowInitialState? = null,
     // File-level mock scenarios (operationId -> scenario) applied before the
@@ -317,7 +326,26 @@ data class TestResult(
      * the first run). Null on skipped rows — a case that never ran has no
      * attempt count (results.schema.json attempts).
      */
-    val attempts: Int? = null
+    val attempts: Int? = null,
+    /**
+     * The orientation this case ASKED for, after resolving the whole chain:
+     * a `setOrientation` step in the case, else the file's top-level
+     * `orientation`, else the run default for this device's tier. Null when
+     * nothing declared one.
+     */
+    val declaredOrientation: String? = null,
+    /**
+     * The orientation the case ACTUALLY ran in, read from the device rather
+     * than derived from [declaredOrientation].
+     *
+     * Two fields because they can disagree, and on THIS driver they did:
+     * until 1.12.0 `"portrait"` mapped to `setOrientationNatural()`, so a
+     * tablet whose natural orientation is landscape stayed landscape while
+     * every assertion passed. That is fixed, but the pair is what makes the
+     * next such inversion visible instead of silent — a derived value could
+     * not disagree, which is precisely the disagreement being measured.
+     */
+    val observedOrientation: String? = null
 )
 
 data class TestSuiteResult(

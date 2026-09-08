@@ -1063,21 +1063,32 @@ class ActionExecutor(
     }
 
     /**
-     * Rotate the device: landscape → setOrientationLeft, portrait →
-     * setOrientationNatural. Assumes a portrait-natural device (phones /
-     * portrait-default emulators); on a landscape-natural tablet "portrait"
-     * restores the natural — landscape — orientation instead. Waits for idle
-     * (plus a short settle) so the rotated layout is stable before the next
-     * step; responsive conditions re-read the live window size afterwards, so
-     * `landscape` / `*-landscape` buckets become exercisable.
+     * Rotate the device to a requested ORIENTATION, not to a rotation
+     * relative to whatever this device calls natural.
+     *
+     * Until 1.12.0 this was `landscape -> setOrientationLeft()` and
+     * `portrait -> setOrientationNatural()`, both of which are natural-
+     * relative, so BOTH arms inverted on a landscape-natural tablet: the
+     * conf_ci AVD (2560x1600, rotation 0) turned portrait on `"landscape"`
+     * and stayed landscape on `"portrait"`. See [OrientationCommand] for the
+     * measurement and for what the replacements actually do.
+     *
+     * The visible cost of the old pair was not a red test — every case still
+     * passed, in the wrong orientation — but a gate that could never be met:
+     * `responsive: { orientation: "portrait" }` was unreachable on such a
+     * device, so filling in responsive conditions added unreachable arms.
+     *
+     * Waits for idle (plus a short settle) so the rotated layout is stable
+     * before the next step; responsive conditions re-read the live window
+     * size afterwards.
      */
     private fun executeSetOrientation(step: TestStep) {
         val orientation = step.orientation
             ?: throw IllegalArgumentException("setOrientation requires 'orientation'")
-        when (orientation) {
-            "landscape" -> device.setOrientationLeft()
-            "portrait" -> device.setOrientationNatural()
-            else -> throw IllegalArgumentException(
+        when (OrientationCommand.forOrientation(orientation)) {
+            OrientationCommand.PORTRAIT -> device.setOrientationPortrait()
+            OrientationCommand.LANDSCAPE -> device.setOrientationLandscape()
+            null -> throw IllegalArgumentException(
                 "Invalid orientation: $orientation (expected 'portrait' or 'landscape')"
             )
         }
