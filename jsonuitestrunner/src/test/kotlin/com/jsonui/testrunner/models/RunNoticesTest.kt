@@ -83,4 +83,52 @@ class RunNoticesTest {
         assertTrue("the README config example dropped resultsPath",
             readme.contains("resultsPath ="))
     }
+
+    @Test
+    fun `the unstick notice names the sink, not just the rule`() {
+        // 🚨 The face that accepted scrollUntilVisible greped for `unstick`,
+        // got 0, and nearly reported "the rule never ran". THREE facts make
+        // that 0: the rule did not fire; Android discarded System.out; the
+        // grep missed logcat's `I/System.out:` tag. A notice that only says
+        // "the rule exists" does not separate them — it has to name the sink.
+        val src = java.io.File(
+            javaClass.classLoader!!.getResource("")!!.path
+                .substringBefore("/build/") +
+                "/src/main/kotlin/com/jsonui/testrunner/actions/ActionExecutor.kt"
+        ).readText()
+        val code = src.lines().filterNot {
+            val t = it.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }.joinToString("\n")
+
+        // ⚠️ PINNED AS ONE CONTIGUOUS BLOCK, INDENTATION INCLUDED. The first
+        // draft asserted the pieces separately, and `if (false) RunNotices…`
+        // left every piece in place: the guard is a THIRD claim after "calls
+        // it" and "says it". This lane made that exact mistake twice earlier
+        // tonight and then made it again here — writing the rule down is not
+        // the same as applying it.
+        val block = "        RunNotices.once(\n" +
+            "            \"unstick-output\",\n"
+        assertTrue(
+            "the unstick notice is no longer emitted unconditionally at the " +
+                "top of the flush — a guard, a rename or a deletion all land here",
+            code.contains(block)
+        )
+
+        // ⚠️ The sink must be named IN THE NOTICE, not merely somewhere in
+        // the file. The first draft matched `System.out` anywhere in the
+        // method, so a mutation that removed it from the sentence still
+        // passed on the word's other occurrence.
+        val notice = code.substringAfter(block).substringBefore(")\n")
+        assertTrue("the notice must name System.out as the sink",
+            notice.contains("System.out"))
+        assertTrue("the notice must name logcat's tag, or a grep will miss it",
+            notice.contains("I/System.out:"))
+        assertTrue("the notice must say an absent line is not evidence",
+            notice.contains("not evidence"))
+        assertTrue(
+            "the notice must NOT be routed through the verbose-gated log()",
+            !code.contains("log(\"[ActionExecutor] unstick")
+        )
+    }
 }

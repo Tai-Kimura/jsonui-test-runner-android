@@ -1,5 +1,6 @@
 package com.jsonui.testrunner.actions
 
+import com.jsonui.testrunner.models.RunNotices
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Rect
@@ -1188,6 +1189,34 @@ class ActionExecutor(
             device.swipe(cx, cy - step, cx, cy + step, 20)
             device.waitForIdle()
         }
+        // 🚨 THE LINE A FACE READS TO TELL "THE RULE DID NOT FIRE" FROM "I
+        // COULD NOT SEE IT". Reported 2026-09-09 by the face that accepted
+        // this fix: `adb logcat | grep unstick` came back 0 and they nearly
+        // wrote "the rule never ran". Three different facts produce that 0 —
+        //
+        //     the rule did not fire
+        //     Android discarded System.out (log.redirect-stdio is empty by
+        //         default, and the JUnit XML then carries 0 <system-out>)
+        //     the grep looked for a bare `unstick` while logcat tags it
+        //         `I/System.out:`
+        //
+        // ⚠️ Same family as `[orientation]`, which this driver shipped behind
+        // a verbose flag until 1.13.0. A judgment line that only a debug
+        // setting reveals is worth nothing at the moment someone doubts it.
+        //
+        // ⚠️ Still `println`, not `log()`: the point is that it must NOT
+        // depend on `config.verbose`. What changes is that the RUN says once,
+        // by default, that this rule is in play and where its output goes —
+        // so a face that greps and finds nothing knows which of the three
+        // facts it is looking at.
+        RunNotices.once(
+            "unstick-output",
+            "scrollUntilVisible may print an `[ActionExecutor] unstick …` line " +
+                "per target. It goes to System.out, which logcat tags " +
+                "`I/System.out:` and which Android discards entirely unless " +
+                "stdio redirection is on — so an absent line is not evidence " +
+                "the rule did not fire."
+        )
         println("[ActionExecutor] unstick '$id': flush at ${before.bottom} of " +
             "${surface.bottom}, clearance=" +
             "${ViewportMargin.clearanceFor(surface.height(), surface.width())}, " +
