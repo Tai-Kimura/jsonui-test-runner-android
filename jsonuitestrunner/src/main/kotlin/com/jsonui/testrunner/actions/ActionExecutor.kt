@@ -673,6 +673,7 @@ class ActionExecutor(
 
         if (device.findObject(By.res(id)) != null) {
             awaitTargetSettled(id)
+            unstickFromTrailingEdge(id, step.container)
             return
         }
 
@@ -1149,6 +1150,50 @@ class ActionExecutor(
      * read whether targets ever move after being found (movement 0 on every
      * line is the refutation of the mechanism above).
      */
+    /**
+     * One extra scroll when the target stopped FLUSH against the trailing
+     * edge, kept only if it improved the position.
+     *
+     * See [ViewportMargin]. The early return above is satisfied by existence,
+     * so a target peeking a few pixels above the bottom is "found" and the
+     * search stops there. That is fine until operating it reveals something
+     * directly below it, which then lands off-screen and is not projected —
+     * producing a census identical to the operation having done nothing.
+     *
+     * ⚠️ Speculative by construction, so it is guarded rather than trusted:
+     * [ViewportMargin.keepScrolledPosition] re-measures afterwards and the
+     * scroll is reverted when the target went away or ended up nearer the
+     * edge. A test that passes today can only see the target in the same
+     * place or further from the edge.
+     */
+    private fun unstickFromTrailingEdge(id: String, containerId: String?) {
+        val surface = (containerId?.let { cid ->
+            device.findObject(By.res(cid))?.visibleBounds?.takeIf { !it.isEmpty }
+        } ?: appSurfaceBounds().rect)
+        val before = device.findObject(By.res(id))?.visibleBounds ?: return
+        if (!ViewportMargin.isFlushAgainstTrailingEdge(
+                before.bottom, surface.bottom, surface.height(), surface.width())) {
+            return
+        }
+        val cx = surface.centerX()
+        val cy = surface.centerY()
+        val step = (surface.height() * ViewportMargin.CLEARANCE_FRACTION).toInt()
+            .coerceAtLeast(1)
+        device.swipe(cx, cy + step, cx, cy - step, 20)
+        device.waitForIdle()
+        val after = device.findObject(By.res(id))?.visibleBounds
+        val keep = ViewportMargin.keepScrolledPosition(
+            before.bottom, after?.bottom, surface.bottom)
+        if (!keep) {
+            device.swipe(cx, cy - step, cx, cy + step, 20)
+            device.waitForIdle()
+        }
+        println("[ActionExecutor] unstick '$id': flush at ${before.bottom} of " +
+            "${surface.bottom}, clearance=" +
+            "${ViewportMargin.clearanceFor(surface.height(), surface.width())}, " +
+            "after=${after?.bottom}, kept=$keep")
+    }
+
     private fun awaitTargetSettled(id: String) {
         val startedAt = System.currentTimeMillis()
         val samples = mutableListOf<Box>()

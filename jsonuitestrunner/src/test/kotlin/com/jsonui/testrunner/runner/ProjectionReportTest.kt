@@ -41,13 +41,35 @@ class ProjectionReportTest {
     fun theAppSideNeverProjectedIt() {
         // The 2026-07-17 shape: the projection holds a subtree the current
         // composition no longer has, and neither recovery produces the id.
+        //
+        // ⚠️ REPOINTED 2026-09-08. This used to assert the sentence "the app
+        // side never projected it" on the DEFAULT render, and that assertion
+        // is what made the overclaim look verified: the same census is
+        // produced by an id that exists BELOW the viewport, and the default
+        // render knows nothing about a scroll container. The claim now lives
+        // in the NO_ROOM_LEFT branch alone — see the case below and
+        // OffscreenPossibilityTest. What this arm still owns is the 2026-07-17
+        // shape itself: verdict, and that the stale ids are shown.
         val stale = setOf("detailPane", "pane_content", "legacy_list")
         val verdict = ProjectionReport.verdict(missing, stale, stale, stale)
         assertEquals(ProjectionVerdict.STILL_MISSING, verdict)
         val text = ProjectionReport.render(missing, stale, stale, stale)
         assertTrue(text, text.contains("STILL_MISSING"))
-        assertTrue(text, text.contains("the app side never projected it"))
         assertTrue(text, text.contains("legacy_list"))
+        assertTrue(text, text.contains("UNKNOWN"))
+        assertTrue(text, !text.contains("the app side never projected it"))
+    }
+
+    @Test
+    fun theOriginalClaimSurvivesWhereItIsWarranted() {
+        // The control for the repointing above. Weakening a message is only
+        // correct if the strong form is still REACHABLE — otherwise the fix
+        // deleted a true statement instead of bounding a false one.
+        val stale = setOf("detailPane", "pane_content", "legacy_list")
+        val text = ProjectionReport.render(
+            missing, stale, stale, stale,
+            offscreen = OffscreenPossibility.NO_ROOM_LEFT)
+        assertTrue(text, text.contains("the app side never projected it"))
     }
 
     @Test

@@ -74,7 +74,8 @@ object ProjectionReport {
         before: Set<String>,
         afterClearCache: Set<String>,
         afterServiceResync: Set<String>,
-        sampleLimit: Int = 24
+        sampleLimit: Int = 24,
+        offscreen: OffscreenPossibility = OffscreenPossibility.UNKNOWN
     ): String {
         val verdict = verdict(id, before, afterClearCache, afterServiceResync)
         val lines = mutableListOf(
@@ -93,8 +94,29 @@ object ProjectionReport {
         if (verdict == ProjectionVerdict.STILL_MISSING) {
             lines += "  the projection holds these instead (${before.size}, first $sampleLimit): " +
                 before.sorted().take(sampleLimit)
-            lines += "  => neither UiAutomator's cache nor a service resync produced it; " +
-                "the app side never projected it"
+            // ⚠️ The old text ended "the app side never projected it" in every
+            // case. That is a claim about the APP, and an id that appeared
+            // BELOW the viewport produces exactly this census while the app
+            // rendered it correctly — reported 2026-09-08 by a face that had
+            // to run its suite a second time to tell the two apart. Each
+            // branch now says only what the evidence at hand supports.
+            lines += when (offscreen) {
+                OffscreenPossibility.NO_ROOM_LEFT ->
+                    "  => neither UiAutomator's cache nor a service resync produced it, " +
+                        "and the scroll container reports no further room — so it is " +
+                        "not merely off-screen: the app side never projected it"
+                OffscreenPossibility.ROOM_LEFT ->
+                    "  => neither UiAutomator's cache nor a service resync produced it, " +
+                        "BUT the scroll container still has room. Off-screen nodes are " +
+                        "not projected, so this does NOT distinguish 'never rendered' " +
+                        "from 'rendered below the viewport'. Scroll to it before " +
+                        "asserting, or read the previous step's stop position"
+                OffscreenPossibility.UNKNOWN ->
+                    "  => neither UiAutomator's cache nor a service resync produced it. " +
+                        "No scroll container was resolved here, so whether it exists " +
+                        "off-screen is UNKNOWN — this is not evidence that the app " +
+                        "never projected it"
+            }
         }
         return lines.joinToString("\n")
     }
