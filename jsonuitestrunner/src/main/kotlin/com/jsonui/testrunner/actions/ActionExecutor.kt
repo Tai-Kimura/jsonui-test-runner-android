@@ -1382,6 +1382,40 @@ class ActionExecutor(
                 "runner's tag and no substring of the lines it describes, so it " +
                 "cannot be counted as one of them."
         )
+        // 📌 THE CANONICAL PREDICATE FOR COUNTING THESE LINES IS
+        //
+        //         [ActionExecutor] unstick '
+        //
+        // — the prefix INCLUDING THE OPENING QUOTE. Prose does not write a
+        // bare quote after the word, so a sentence about the rule cannot
+        // match it, while every emitted line does.
+        //
+        // 🚫 IT CANNOT BE STATED IN THE NOTICE, and that is not an oversight:
+        // a notice that spells the predicate becomes an instance of it. That
+        // is the defect this file already carries a fix for. So the predicate
+        // is documented HERE, at the line it describes, and the notice
+        // describes without reproducing.
+        //
+        // ⚠️ THE TAG ALONE IS NOT ENOUGH. `[ActionExecutor]` also prefixes the
+        // settle lines, the retry warnings and the tap diagnostics; filtering
+        // on it counts all of them. The tag separates this from the RUNNER's
+        // notice, which is what stops the notice being counted — it does not
+        // isolate the unstick lines from their siblings.
+        //
+        // ⚠️ AND THE SUBSTRING GUARD PROTECTS THIS PREDICATE, NOT EVERY LOOSE
+        // ONE. A consuming face raised that `unstick` alone is seven
+        // characters and slips under the bound, so a notice rewritten as "the
+        // unstick rule may not print" would inflate a `grep -c unstick`. It
+        // would — and that count is not the canonical one. Forbidding the
+        // word from a notice whose subject IS the word is not a rule anyone
+        // can keep; protecting the predicate that carries the quote is.
+        //
+        // ⚠️ ORDER IS PART OF THE CONTRACT. Two faces parse
+        // `flush at (\d+) of (\d+)` and derive the firing counts and the
+        // settle budget from those two numbers. New fields go at the END of
+        // the line, after `clearance=`; nothing is inserted between the phase
+        // marker and `flush at`.
+        //
         // ⚠️ `surface` AND `step` ARE HERE SO THE OPEN QUESTION IS ANSWERABLE
         // FROM AN ORDINARY RUN. A filed report establishes that
         // CLEARANCE_FRACTION is applied to two different bases in one flow —
