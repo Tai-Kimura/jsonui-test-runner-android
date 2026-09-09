@@ -1180,14 +1180,30 @@ class ActionExecutor(
      *
      * 🚨 THAT GUARANTEE IS ABOUT POSITION AND NOTHING ELSE. Widening this to
      * the scroll legs costs a lookup on every scrollUntilVisible, and a swipe
-     * plus up to [TargetSettle.BUDGET_MS] on every one that fires. Two faces
-     * pointed out, independently, that "only the timing changes" is a claim in
-     * the direction that hurts: on a suite running near a per-case or
-     * per-action timeout, a timing change and a pass/fail change are the same
-     * event. THE TIMEOUT HEADROOM IS NOT MEASURED — no face has reported how
-     * close to its limits it runs, and this repo cannot see that. Read it as
-     * "the position cannot get worse; the duration grows by an unmeasured
-     * amount", never as "this cannot redden a test".
+     * plus up to [TargetSettle.BUDGET_MS] on every one that fires. On a suite
+     * running near a per-case or per-action timeout, a timing change and a
+     * pass/fail change are the same event, so "only the timing changes" is a
+     * claim in the direction that hurts. THE TIMEOUT HEADROOM IS NOT MEASURED
+     * — no face has reported how close to its limits it runs, and this repo
+     * cannot see that. Read this as "the position cannot get worse; the
+     * duration grows by an unmeasured amount", never as "this cannot redden a
+     * test".
+     *
+     * ⚠️ That objection is a LOGICAL one and nobody has measured it. It was
+     * raised by two faces reading the release notice, and this comment first
+     * credited them as agreeing "independently" — wrongly. They were reacting
+     * to the same sentence in that notice, so the sources are two readers of
+     * one stimulus, not two observations; the reviewer who spotted the
+     * inflation also asked not to be cited as having measured anything.
+     * Counting readers of your own claim as corroboration of it inflates
+     * exactly the way an unverified consensus does.
+     *
+     * 📌 The headroom instrument that DOES exist is in this driver's own
+     * output: [TargetSettle.settleLine] prints `after <N>ms` against
+     * [TargetSettle.BUDGET_MS], so `settled=false after 2000ms` IS a call that
+     * has already spent its whole budget. Suite wall-clock cannot substitute —
+     * a total over dozens of cases cannot say whether one step reached its own
+     * 20s limit. Read the settle lines, not the lane time.
      */
     private fun unstickFromTrailingEdge(id: String, containerId: String?, via: String) {
         val surface = (containerId?.let { cid ->
