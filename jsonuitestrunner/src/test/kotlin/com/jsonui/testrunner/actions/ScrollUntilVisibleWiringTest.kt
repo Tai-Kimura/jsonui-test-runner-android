@@ -671,6 +671,20 @@ class ScrollUntilVisibleWiringTest {
          * because the next person to add a sentence to that notice needs to
          * know how little room there is — not to raise the number.
          */
+        // 🚨 8 IS A CEILING, NOT A TUNING KNOB. THE RESIDUAL IS A WORD.
+        //
+        // The longest run the notice still shares with the settle line is
+        // seven characters, `isible ` — the tail of `visible`, which both
+        // texts must contain because both are about making a target visible.
+        // Independently recomputed by a reviewing lane: 5 against the unstick
+        // format, 7 against the settle format, from either end.
+        //
+        // So eight is the tightest bound that does not ban the word. When a
+        // future rewording reaches eight, the repair is to REWORD IT AGAIN.
+        // 🚫 Raising this number turns the guard from "these texts do not
+        // collide" into "they collide and it passes", and it is the cheapest
+        // thing for whoever finds themselves red — which is exactly why it is
+        // written down here rather than left to judgement.
         const val MAX_SHARED_RUN = 8
     }
 }
