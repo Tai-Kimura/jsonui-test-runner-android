@@ -438,4 +438,82 @@ class ScrollUntilVisibleWiringTest {
         assertTrue("and it must reach System.out, not only the result object",
             between.contains("println("))
     }
+
+    /**
+     * The notice must not contain any fixed fragment of the lines it is about.
+     *
+     * 🚨 REPORTED FROM FIVE CAPTURES ACROSS TWO FACES: the notice spelled the
+     * data line's prefix, so `grep -c` for that prefix counted the notice —
+     * exactly +1 per run. That count is a denominator AND an invariant, and
+     * one face read `unstick 13 / after-unstick 12`, a violation the emit
+     * order makes impossible, then closed it with a plausible explanation
+     * until another face shot it from the ordering.
+     *
+     * ⚠️ THE FORBIDDEN TOKENS ARE DERIVED FROM THE DATA LINE, NOT LISTED HERE.
+     * A hand-written list is a second declaration: rename a fragment in the
+     * `println` and the list keeps checking the old one, silently. This takes
+     * the fixed (non-interpolated) fragments of the emitted line and requires
+     * the notice to carry none of them.
+     *
+     * ⚠️ AND IT COMPARES EMITTED BYTES, NOT SOURCE. The first repair split the
+     * token as `"un" + "stick"`, which changes the source and not one byte of
+     * the output; the second named the replacement predicate inside the notice
+     * and recreated the collision against it. Both passed a check that grepped
+     * the source. Consumers grep the log.
+     */
+    @Test
+    fun `the unstick notice shares no fixed fragment with the line it describes`() {
+        val raw = source
+        val noticeAt = raw.indexOf("RunNotices.once(")
+        val lineAt = raw.indexOf("println(\"[ActionExecutor] unstick", noticeAt)
+        assertTrue("both sites must exist", noticeAt in 0 until lineAt)
+
+        // Emitted text = the string literals with comments removed FIRST, so a
+        // comment about a token is never mistaken for the token.
+        fun emitted(block: String, dropFirst: Int): String {
+            val noComments = block.replace(Regex("//[^\n]*"), "")
+            return Regex(""""((?:[^"\\]|\\.)*)"""")
+                .findAll(noComments).map { it.groupValues[1] }.drop(dropFirst)
+                .joinToString("")
+        }
+        // drop 1: the notice's first literal is its key, not its text.
+        val notice = emitted(raw.substring(noticeAt, lineAt), 1)
+        val data = emitted(raw.substring(lineAt, raw.indexOf("\n    }", lineAt)), 0)
+            .split(Regex("\\$\\{[^}]*\\}|\\$[A-Za-z_]+")).joinToString(" ")
+
+        assertTrue("the arm read nothing: notice=${notice.length} data=${data.length}",
+            notice.length > 40 && data.length > 40)
+
+        var longest = ""
+        for (i in data.indices) {
+            var j = i + longest.length + 1
+            while (j <= data.length && notice.contains(data.substring(i, j))) {
+                longest = data.substring(i, j); j++
+            }
+        }
+        assertTrue(
+            "the notice reproduces ${longest.length} characters of the line it " +
+                "describes: '$longest'. Describe the line; do not spell it.",
+            longest.length < MAX_SHARED_RUN
+        )
+    }
+
+    private companion object {
+        /**
+         * How much of the data line the notice may echo before it is a
+         * collision rather than a coincidence.
+         *
+         * Measured 2026-09-09, three versions of the same notice:
+         * ```
+         *   current, describes only        'ction'                      5
+         *   v1, spelled the prefix         '[ActionExecutor] unstick '  25   <- the reported defect
+         *   v2, named the new predicate    ' flush at'                   9   <- this lane, minutes later
+         * ```
+         * ⚠️ 8 sits three below the passing case and ONE above v2. The margin
+         * on the failing side is a single character, and it is written down
+         * because the next person to add a sentence to that notice needs to
+         * know how little room there is — not to raise the number.
+         */
+        const val MAX_SHARED_RUN = 8
+    }
 }

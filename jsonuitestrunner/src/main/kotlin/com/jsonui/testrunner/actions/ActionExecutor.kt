@@ -1345,11 +1345,42 @@ class ActionExecutor(
         // facts it is looking at.
         RunNotices.once(
             "unstick-output",
-            "scrollUntilVisible may print an `[ActionExecutor] unstick …` line " +
-                "per target. It goes to System.out, which logcat tags " +
-                "`I/System.out:` and which Android discards entirely unless " +
-                "stdio redirection is on — so an absent line is not evidence " +
-                "the rule did not fire."
+            // 🚨 THIS TEXT MUST NOT CONTAIN ANY SUBSTRING OF THE LINES IT
+                // DESCRIBES, AND THAT IS A PROPERTY OF THE EMITTED BYTES, NOT
+                // OF THE SOURCE.
+                //
+                // v1: the notice spelled the data line's prefix in full, so a
+                // consumer's `grep -c` for that prefix counted the notice too —
+                // exactly +1 per run, reproduced on five captures across two
+                // faces. One face then saw `unstick 13 / after-unstick 12`,
+                // which the emit order makes IMPOSSIBLE, and closed it with a
+                // plausible explanation until another face shot it from the
+                // ordering. A warning whose subject is "an absent line is not
+                // evidence" was manufacturing a presence, and only for the
+                // people who read it — they are the ones who go and count.
+                //
+                // v2 (this lane, minutes later) made it WORSE in two ways, and
+                // both are recorded because the fix looks obvious and is not:
+                //   * it split the token as `"un" + "stick"`. Concatenation
+                //     changes the source and not one byte of the output.
+                //   * it then named `flush at` as the predicate to count with,
+                //     INSIDE the notice — recreating the identical collision
+                //     against the replacement token.
+                // Both passed a check that grepped the SOURCE. The consumer
+                // greps the LOG.
+                //
+                // v3 reproduces nothing. It names the tag boundary instead:
+                // the data lines are tagged with this class, this notice is
+                // tagged by the runner, and a filter on the data tag excludes
+                // it without needing any literal from either.
+                "scrollUntilVisible may print one diagnostic line per target, " +
+                "tagged with this class rather than with the runner. It goes to " +
+                "System.out, which logcat tags `I/System.out:` and which Android " +
+                "discards entirely unless stdio redirection is on — so an absent " +
+                "line is not evidence the rule did not fire. ⚠️ When counting " +
+                "them, filter on that class tag: this notice carries the " +
+                "runner's tag and no substring of the lines it describes, so it " +
+                "cannot be counted as one of them."
         )
         println("[ActionExecutor] unstick '$id' [$via]: flush at ${before.bottom} of " +
             "${surface.bottom}, clearance=" +
