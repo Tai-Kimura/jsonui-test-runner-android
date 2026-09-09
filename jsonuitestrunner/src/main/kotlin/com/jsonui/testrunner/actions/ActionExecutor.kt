@@ -1373,7 +1373,13 @@ class ActionExecutor(
                 // the data lines are tagged with this class, this notice is
                 // tagged by the runner, and a filter on the data tag excludes
                 // it without needing any literal from either.
-                "scrollUntilVisible may print one diagnostic line per target, " +
+                // ⚠️ HYPHENATED ON PURPOSE. `scrollUntilVisible` is itself a
+                // token consumers count — one face measured 132 against 131
+                // real lines and 135 against 134, the same +1 this notice was
+                // rewritten to remove, one line family over. The action's own
+                // name cannot appear here contiguously.
+                "the scroll-until-visible step may print one diagnostic line " +
+                "per target, " +
                 "tagged with this class rather than with the runner. It goes to " +
                 "System.out, which logcat tags `I/System.out:` and which Android " +
                 "discards entirely unless stdio redirection is on — so an absent " +

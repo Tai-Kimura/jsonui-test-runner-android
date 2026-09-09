@@ -482,41 +482,83 @@ class ScrollUntilVisibleWiringTest {
      * the source. Consumers grep the log.
      */
     @Test
-    fun `the unstick notice shares no fixed fragment with the line it describes`() {
+    fun `the notice shares no fixed fragment with ANY line family it covers`() {
         val raw = source
         val noticeAt = raw.indexOf("RunNotices.once(")
+        assertTrue("the notice must exist", noticeAt >= 0)
         val lineAt = raw.indexOf("println(\"[ActionExecutor] unstick", noticeAt)
-        assertTrue("both sites must exist", noticeAt in 0 until lineAt)
+        assertTrue("the unstick emit must exist", lineAt > noticeAt)
 
-        // Emitted text = the string literals with comments removed FIRST, so a
-        // comment about a token is never mistaken for the token.
         fun emitted(block: String, dropFirst: Int): String {
             val noComments = block.replace(Regex("//[^\n]*"), "")
             return Regex(""""((?:[^"\\]|\\.)*)"""")
                 .findAll(noComments).map { it.groupValues[1] }.drop(dropFirst)
                 .joinToString("")
         }
-        // drop 1: the notice's first literal is its key, not its text.
+        fun fixedOf(s: String) =
+            s.split(Regex("\\$\\{[^}]*\\}|\\$[A-Za-z_]+")).joinToString(" ")
+
         val notice = emitted(raw.substring(noticeAt, lineAt), 1)
-        val data = emitted(raw.substring(lineAt, raw.indexOf("\n    }", lineAt)), 0)
-            .split(Regex("\\$\\{[^}]*\\}|\\$[A-Za-z_]+")).joinToString(" ")
+        assertTrue("the arm read no notice text", notice.length > 40)
 
-        assertTrue("the arm read nothing: notice=${notice.length} data=${data.length}",
-            notice.length > 40 && data.length > 40)
+        // 🚨 EVERY LINE FAMILY, NOT THE ONE THIS ARM WAS WRITTEN FOR.
+        //
+        // The first version compared the notice against the unstick line
+        // alone and reported a bound of eight. A consuming face measured the
+        // notice against the SETTLE line and found nineteen shared
+        // characters — `scrollUntilVisible ` — and the same +1 per run in its
+        // own logs (132 counted against 131 real, 135 against 134). The
+        // shipped instruction saves consumers, because filtering on the class
+        // tag excludes the notice either way; the guard did not, while
+        // naming a number as though it did.
+        //
+        // The families are derived: the settle line's format lives in
+        // TargetSettle, so a list written here would have been the same
+        // hand-written population that produced the gap.
+        val settleSrc = listOf(
+            "src/main/kotlin/com/jsonui/testrunner/actions/TargetSettle.kt",
+            "jsonuitestrunner/src/main/kotlin/com/jsonui/testrunner/actions/TargetSettle.kt",
+            "../jsonuitestrunner/src/main/kotlin/com/jsonui/testrunner/actions/TargetSettle.kt"
+        ).map { File(it) }.firstOrNull { it.isFile }
+        assertTrue("TargetSettle.kt not found — the arm cannot see the settle line",
+            settleSrc != null)
+        val settleBody = codeOnlyKeepingLiterals(settleSrc!!.readText())
+        val settleAt = settleBody.indexOf("fun settleLine(")
+        assertTrue("settleLine not found", settleAt >= 0)
+        // ⚠️ BOUNDED TO THE DECLARATION. The first version read from
+        // `settleLine` to the END OF THE FILE and swept in every later
+        // literal — which made a hand check and this arm disagree (10 shared
+        // characters against a pass) on text neither line actually emits. An
+        // over-broad window does not fail loudly; it reports about something
+        // else.
+        val settleEnd = settleBody.indexOf("\n    fun ", settleAt + 1)
+            .let { if (it < 0) settleBody.length else it }
+        val settleFmt = emitted(settleBody.substring(settleAt, settleEnd), 0)
 
-        var longest = ""
-        for (i in data.indices) {
-            var j = i + longest.length + 1
-            while (j <= data.length && notice.contains(data.substring(i, j))) {
-                longest = data.substring(i, j); j++
-            }
-        }
-        assertTrue(
-            "the notice reproduces ${longest.length} characters of the line it " +
-                "describes: '$longest'. Describe the line; do not spell it.",
-            longest.length < MAX_SHARED_RUN
+        val families = mapOf(
+            "unstick" to fixedOf(emitted(raw.substring(lineAt, raw.indexOf("\n    }", lineAt)), 0)),
+            "settle" to fixedOf(settleFmt)
         )
+        families.forEach { (name, text) ->
+            assertTrue("no format text extracted for '$name'", text.length > 20)
+            var longest = ""
+            for (i in text.indices) {
+                var j = i + longest.length + 1
+                while (j <= text.length && notice.contains(text.substring(i, j))) {
+                    longest = text.substring(i, j); j++
+                }
+            }
+            assertTrue(
+                "the notice reproduces ${longest.length} characters of the '$name' " +
+                    "line: '$longest'. Describe the lines; do not spell any of them.",
+                longest.length < MAX_SHARED_RUN
+            )
+        }
     }
+
+    /** Comments out, literals kept — for a file other than [source]. */
+    private fun codeOnlyKeepingLiterals(text: String): String = withoutComments(text)
+
 
     /**
      * The diagnostic line carries both quantities the open report needs.
