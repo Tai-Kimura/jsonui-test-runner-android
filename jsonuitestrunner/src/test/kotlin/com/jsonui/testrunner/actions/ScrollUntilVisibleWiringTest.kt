@@ -42,6 +42,49 @@ class ScrollUntilVisibleWiringTest {
         found!!.readText()
     }
 
+    /**
+     * Comments removed, string literals KEPT.
+     *
+     * 🚨 [codeOnly] removes both, which makes an emitted SPELLING invisible.
+     * The obvious repair — assert the literal against the raw file — matched
+     * the ARM'S OWN COMMENT explaining the literal, so deleting the prefix
+     * from the code left the arm green. Measured: that mutation passed.
+     *
+     * ⚠️ This is the failure this class documents elsewhere, committed by
+     * this class. A source-reading arm cannot tell an implementation from a
+     * sentence about it, and prose describing a fix is written in the fix's
+     * own vocabulary — so the arm is at its blindest exactly where the change
+     * is best explained.
+     */
+    private fun withoutComments(text: String): String {
+        val sb = StringBuilder()
+        var i = 0
+        var quote: Char? = null
+        while (i < text.length) {
+            val c = text[i]
+            if (quote != null) {
+                sb.append(c)
+                if (c == '\\' && i + 1 < text.length) { sb.append(text[i + 1]); i += 2; continue }
+                if (c == quote) quote = null
+                i++
+                continue
+            }
+            if (c == '"' || c == '\'') { quote = c; sb.append(c); i++; continue }
+            if (c == '/' && i + 1 < text.length && text[i + 1] == '/') {
+                while (i < text.length && text[i] != '\n') i++
+                continue
+            }
+            if (c == '/' && i + 1 < text.length && text[i + 1] == '*') {
+                i += 2
+                while (i + 1 < text.length && !(text[i] == '*' && text[i + 1] == '/')) i++
+                i += 2
+                continue
+            }
+            sb.append(c); i++
+        }
+        return sb.toString()
+    }
+
     /** Source with comments and string literals removed. */
     private fun codeOnly(text: String): String {
         val sb = StringBuilder()
@@ -349,7 +392,17 @@ class ScrollUntilVisibleWiringTest {
      * The arm therefore pins the warning, not just the early exit.
      */
     @Test
-    fun `the unstick skips a target outside its surface and says so`() {
+    fun `the unstick reports a target outside its surface without skipping it`() {
+        // ⚠️ TWO WINDOWS, AND THEY ARE NOT THE SAME SIZE. `codeOnly` strips
+        // string literals, so an emitted SPELLING is invisible in it. The
+        // first draft asserted the literal against stripped text; the second
+        // called it `raw` while `bodyOf` strips internally — a rename, not a
+        // window. Structure is checked on the stripped BODY; the spelling on
+        // the unstripped FILE, which is the only raw text this class holds.
+        //
+        // ⚠️ So the spelling arm does not prove the literal is in THIS
+        // function — a weaker window than the structure arms, said out loud
+        // rather than implied by the variable's name.
         val body = codeOnly(bodyOf("unstickFromTrailingEdge"))
         val seq = sequenceOf(
             body,
@@ -369,5 +422,20 @@ class ScrollUntilVisibleWiringTest {
         // vertical swipe never had anything to do with.
         assertFalse("the four-sided test must not come back",
             body.contains("surface.contains("))
+        // 🚨 WARN-ONLY: the judgment must not suppress the swipe in 1.15.1.
+        // A false positive that also skips leaves the target invisible and
+        // reddens a LATER step, so the warning and the real defect become
+        // indistinguishable. Pinned as the ABSENCE of an exit between the
+        // report and the edge test — presence of the warning cannot say it.
+        val between = body.substring(
+            body.indexOf("isOutsideTrailingEdge("),
+            body.indexOf("isFlushAgainstTrailingEdge("))
+        assertFalse("the outside branch must not return in 1.15.1",
+            Regex("\\breturn\\b").containsMatchIn(between))
+        // The line has to be countable by the readers that count it.
+        assertTrue("the warning needs a greppable severity prefix",
+            withoutComments(source).contains("WARN [scrollUntilVisible]"))
+        assertTrue("and it must reach System.out, not only the result object",
+            between.contains("println("))
     }
 }

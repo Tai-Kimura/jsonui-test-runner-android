@@ -1243,15 +1243,40 @@ class ActionExecutor(
         // static (is `container` an ancestor of `id` in the layout?) and
         // belongs to the test validator, not to a runtime line.
         if (ViewportMargin.isOutsideTrailingEdge(before.bottom, surface.bottom)) {
-            warningHandler?.invoke(
-                "scrollUntilVisible '$id': target is not inside " +
-                    (containerId?.let { "container '$it'" } ?: "the app surface") +
-                    " (target ${before.top}..${before.bottom}, surface " +
-                    "${surface.top}..${surface.bottom}) — scrolling it cannot " +
-                    "move the target, so the unstick step is skipped. If the " +
-                    "step names a `container`, check it is an ancestor of '$id'."
-            )
-            return
+            // 🚨 WARN-ONLY IN 1.15.1. THE SWIPE STILL RUNS.
+            //
+            // Requested by the face that supplied the population, and the
+            // reasoning is theirs: if this judgment is a FALSE POSITIVE and
+            // it also suppresses the scroll, the target never becomes
+            // visible and a LATER step fails somewhere else. The warning is
+            // printed, and the red appears on an unrelated tap. Changing
+            // control flow on a discriminator whose precision is unmeasured
+            // makes a false positive and a real defect look the same.
+            //
+            // That face classified all 106 of its container-bearing steps
+            // and found 14 that STATICALLY look outside but are inside at
+            // the moment they run — 9 embedded in collection cells, 5 whose
+            // container name exists on more than one screen. Neither shape
+            // is resolvable from the layout alone. So the first release
+            // measures the firings; a later one may act on them.
+            //
+            // ⚠️ Greppable ON PURPOSE, and the channel is named. The same
+            // face was bitten this morning by `WARNING [toolchain]:`, which
+            // the conventional warning count (`warning:` needs the colon
+            // adjacent, `\[WARN` does not match `[toolchain]`) silently
+            // misses — a gate whose output its own readers cannot count. The
+            // prefix here is `WARN [scrollUntilVisible]` and it goes BOTH to
+            // the structured result warnings AND to System.out, which logcat
+            // tags `I/System.out:`, beside the `[ActionExecutor] unstick`
+            // lines faces already capture.
+            val line = "WARN [scrollUntilVisible] '$id': target is not inside " +
+                (containerId?.let { "container '$it'" } ?: "the app surface") +
+                " (target bottom ${before.bottom} > surface bottom ${surface.bottom}). " +
+                "Scrolling that surface cannot move the target. The unstick still " +
+                "runs in 1.15.1 — this line is the measurement, not the fix. If the " +
+                "step names a `container`, check it is an ancestor of '$id'."
+            warningHandler?.invoke(line)
+            println("[ActionExecutor] $line")
         }
         if (!ViewportMargin.isFlushAgainstTrailingEdge(
                 before.bottom, surface.bottom, surface.height(), surface.width())) {
