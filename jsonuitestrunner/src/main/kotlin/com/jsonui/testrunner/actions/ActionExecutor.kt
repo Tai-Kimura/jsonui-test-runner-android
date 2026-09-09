@@ -1210,6 +1210,41 @@ class ActionExecutor(
             boundsOf(cid)?.takeIf { !it.isEmpty }
         } ?: appSurfaceBounds().rect)
         val before = boundsOf(id) ?: return
+        // 🚨 THE RULE CAN ONLY MOVE A TARGET THAT IS INSIDE THE SURFACE IT
+        // SCROLLS, and until now it never asked. `isFlushAgainstTrailingEdge`
+        // reads one edge; a target painted BELOW the container — a pinned
+        // footer, say — is "past the trailing edge" by that test and cannot be
+        // moved by scrolling the container at all. The swipe and the settle
+        // are then paid for nothing.
+        //
+        // Measured 2026-09-09 across two faces, 78 firings: 47 moved the
+        // target 0px, and 19 of those had the target outside the named
+        // container. Both faces then read their own layouts and found the
+        // same cause on each side — a `container` naming a node that is NOT
+        // an ancestor of the target.
+        //
+        // ⚠️ SO IT MUST NOT RETURN SILENTLY. A quiet skip fixes the wasted
+        // motion and makes the mis-specification permanently invisible: on one
+        // face those steps had been paying 14 useless swipes a run without
+        // ever going red. The line names both ids, because the fix is in the
+        // TEST, not here.
+        //
+        // ⚠️ And this sees only part of it. A container that cannot hold the
+        // target still says nothing when the target is not near the trailing
+        // edge — those never reach this function. The complete audit is
+        // static (is `container` an ancestor of `id` in the layout?) and
+        // belongs to the test validator, not to a runtime line.
+        if (!surface.contains(before)) {
+            warningHandler?.invoke(
+                "scrollUntilVisible '$id': target is not inside " +
+                    (containerId?.let { "container '$it'" } ?: "the app surface") +
+                    " (target ${before.top}..${before.bottom}, surface " +
+                    "${surface.top}..${surface.bottom}) — scrolling it cannot " +
+                    "move the target, so the unstick step is skipped. If the " +
+                    "step names a `container`, check it is an ancestor of '$id'."
+            )
+            return
+        }
         if (!ViewportMargin.isFlushAgainstTrailingEdge(
                 before.bottom, surface.bottom, surface.height(), surface.width())) {
             return

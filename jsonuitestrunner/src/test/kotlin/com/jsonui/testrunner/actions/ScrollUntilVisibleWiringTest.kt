@@ -334,4 +334,31 @@ class ScrollUntilVisibleWiringTest {
         assertTrue("the settle must use boundsOf", body.contains("boundsOf(id)"))
         assertTrue("absent still ends the loop", body.contains("?: break"))
     }
+
+    /**
+     * The containment gate runs BEFORE the edge test, and it speaks.
+     *
+     * ⚠️ Order is the property, not presence: placed after
+     * `isFlushAgainstTrailingEdge` it would only ever fire for targets that
+     * are already flush, which is the subset that happens to be visible at
+     * runtime — the mis-specified containers whose target sits mid-screen
+     * would still say nothing.
+     *
+     * ⚠️ And a silent `return` would be the same defect wearing a fix: the
+     * wasted swipes go away and the reason they existed becomes unobservable.
+     * The arm therefore pins the warning, not just the early exit.
+     */
+    @Test
+    fun `the unstick skips a target outside its surface and says so`() {
+        val body = codeOnly(bodyOf("unstickFromTrailingEdge"))
+        val seq = sequenceOf(
+            body,
+            listOf("surface.contains(", "warningHandler", "isFlushAgainstTrailingEdge(")
+        )
+        assertEquals(
+            "containment must be tested, reported, and come before the edge test",
+            listOf("surface.contains(", "warningHandler", "isFlushAgainstTrailingEdge("),
+            seq
+        )
+    }
 }
