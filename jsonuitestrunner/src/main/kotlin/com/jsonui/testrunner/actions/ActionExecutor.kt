@@ -1410,11 +1410,24 @@ class ActionExecutor(
         // word from a notice whose subject IS the word is not a rule anyone
         // can keep; protecting the predicate that carries the quote is.
         //
-        // ⚠️ ORDER IS PART OF THE CONTRACT. Two faces parse
-        // `flush at (\d+) of (\d+)` and derive the firing counts and the
-        // settle budget from those two numbers. New fields go at the END of
-        // the line, after `clearance=`; nothing is inserted between the phase
-        // marker and `flush at`.
+        // 🚨 ORDER IS PART OF THE CONTRACT, AND "THE END" MEANS AFTER
+        // `kept=`, NOT AFTER `clearance=`.
+        //
+        // Two faces parse this line and neither reads it the same way. One
+        // matches `flush at (\d+) of (\d+)` and tolerates anything after it.
+        // The other matches all seven groups through to `kept=(\w+)`, which
+        // requires `clearance=` to be IMMEDIATELY followed by `after=`.
+        //
+        // The first placement of `surface=` and `step=` put them between
+        // those two. The loose face reviewed it and called it safe — its own
+        // regex was unaffected — and the strict face's seven-group parser
+        // would have returned nothing at all: no firing counts, no no-op
+        // rate, no margins, every derived number silently zero. It was caught
+        // by that face reading the proposal, not by any check here.
+        //
+        // ⚠️ ONE CONSUMER'S REVIEW IS NOT THE CONTRACT. The arm below asserts
+        // BOTH predicates against the assembled line, so the next field
+        // cannot be placed by judgement about where "the end" is.
         //
         // ⚠️ `surface` AND `step` ARE HERE SO THE OPEN QUESTION IS ANSWERABLE
         // FROM AN ORDINARY RUN. A filed report establishes that
@@ -1435,8 +1448,8 @@ class ActionExecutor(
         println("[ActionExecutor] unstick '$id' [$via]: flush at ${before.bottom} of " +
             "${surface.bottom}, clearance=" +
             "${ViewportMargin.clearanceFor(surface.height(), surface.width())}, " +
-            "surface=${surface.width()}x${surface.height()}, step=$step, " +
-            "after=${after?.bottom}, kept=$keep")
+            "after=${after?.bottom}, kept=$keep, " +
+            "surface=${surface.width()}x${surface.height()}, step=$step")
     }
 
     /**

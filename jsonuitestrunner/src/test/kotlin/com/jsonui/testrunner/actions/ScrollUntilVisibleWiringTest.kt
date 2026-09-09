@@ -555,6 +555,64 @@ class ScrollUntilVisibleWiringTest {
         assertTrue("clearance must stay", body.contains("clearanceFor("))
     }
 
+    /**
+     * Both consuming faces' predicates match the line this file emits.
+     *
+     * 🚨 THEY DO NOT READ IT THE SAME WAY, and one placement satisfied only
+     * one of them. `surface=` and `step=` were first inserted between
+     * `clearance=` and `after=`. The face whose regex is
+     * `flush at (\d+) of (\d+)` reviewed that and called it safe — its own
+     * parser was unaffected. The other face matches all seven groups through
+     * to `kept=`, which requires `clearance=` to be immediately followed by
+     * `after=`; for it the line would have stopped parsing entirely, and
+     * every number derived from it — firing counts, no-op rate, margins —
+     * would have come back zero without an error.
+     *
+     * ⚠️ ONE CONSUMER'S REVIEW IS NOT THE CONTRACT. It was caught by the
+     * second face reading the proposal, not by anything here. So both
+     * predicates live in this arm, verbatim, and a new field cannot be
+     * positioned by anyone's judgement about where "the end" is.
+     *
+     * ⚠️ The line is assembled from the source with placeholders substituted,
+     * because the property is about the EMITTED text: an arm that read the
+     * Kotlin would pass on interpolation syntax the faces never see.
+     */
+    @Test
+    fun `both consuming predicates match the emitted unstick line`() {
+        val body = literalBodyOf("unstickFromTrailingEdge")
+        val at = body.indexOf("println(\"[ActionExecutor] unstick")
+        assertTrue("the emit site must exist", at >= 0)
+        val raw = Regex(""""((?:[^"\\]|\\.)*)"""")
+            .findAll(body.substring(at)).map { it.groupValues[1] }
+            .takeWhile { !it.contains("RunNotices") }
+            .joinToString("")
+        val line = raw
+            .replace("\${before.bottom}", "2295")
+            .replace("\${surface.bottom}", "2127")
+            .replace("\${ViewportMargin.clearanceFor(surface.height(), surface.width())}", "129")
+            .replace("\${surface.width()}", "1080")
+            .replace("\${surface.height()}", "2400")
+            .replace("\${after?.bottom}", "2295")
+            .replace("\$step", "288").replace("\$keep", "true")
+            .replace("\$id", "save_button").replace("\$via", "entry")
+        assertFalse(
+            "placeholders survived substitution — the arm is checking Kotlin, " +
+                "not the emitted line: $line",
+            line.contains("\$")
+        )
+
+        // Verbatim from the two faces, 2026-09-09.
+        val loose = Regex("""flush at (\d+) of (\d+)""")
+        val strict = Regex(
+            """unstick '([^']+)' \[(\w+)\]: flush at (\d+) of (\d+), """ +
+                """clearance=(\d+), after=(\S+), kept=(\w+)"""
+        )
+        assertTrue("the loose consumer's predicate no longer matches: $line",
+            loose.containsMatchIn(line))
+        assertTrue("the seven-group consumer's predicate no longer matches: $line",
+            strict.containsMatchIn(line))
+    }
+
     private companion object {
         /**
          * How much of the data line the notice may echo before it is a
