@@ -1382,9 +1382,26 @@ class ActionExecutor(
                 "runner's tag and no substring of the lines it describes, so it " +
                 "cannot be counted as one of them."
         )
+        // ⚠️ `surface` AND `step` ARE HERE SO THE OPEN QUESTION IS ANSWERABLE
+        // FROM AN ORDINARY RUN. A filed report establishes that
+        // CLEARANCE_FRACTION is applied to two different bases in one flow —
+        // the shorter side for the clearance, the scroll axis for the swipe —
+        // and stops there, because whether 576px of travel to recover 129px
+        // is excessive or merely safe needs a device, and the reporting lane
+        // had none. Neither number was printed, so no face could answer it
+        // from logs it already keeps. Now both are, and the ratio falls out
+        // of any capture: on a 1080x2400 surface the clearance is 129 and the
+        // step 288, and on the same surface reduced to 1000 tall they are 120
+        // and 120.
+        //
+        // 🚫 NOT A FIX FOR THAT REPORT, and it must not be recorded as one.
+        // Aligning the two bases changes how far the driver swipes, which
+        // changes what passing tests do; that decision belongs to whoever can
+        // measure it. This only removes the reason nobody could.
         println("[ActionExecutor] unstick '$id' [$via]: flush at ${before.bottom} of " +
             "${surface.bottom}, clearance=" +
             "${ViewportMargin.clearanceFor(surface.height(), surface.width())}, " +
+            "surface=${surface.width()}x${surface.height()}, step=$step, " +
             "after=${after?.bottom}, kept=$keep")
     }
 

@@ -333,6 +333,26 @@ class ScrollUntilVisibleWiringTest {
      * would pass `takeIf { !it.isEmpty }` at one site and fail it at another.
      */
     /**
+     * A function's text with comments removed and string literals KEPT.
+     *
+     * 🚨 [bodyOf] runs [codeOnly] first, which removes literals too — so
+     * `withoutComments(bodyOf(x))` strips TWICE and an emitted spelling is
+     * still gone. Two arms in this class have now been written against text
+     * the literals had been removed from: once via [bodyOf], once via that
+     * exact double-strip, minutes after the helper for it was added. Having
+     * the right tool is not the same as reaching for it, so the window that
+     * keeps literals gets its own extractor instead of being composed at the
+     * call site.
+     */
+    private fun literalBodyOf(name: String): String {
+        val code = withoutComments(source)
+        val at = code.indexOf("private fun $name(")
+        assertTrue("declaration of $name not found", at >= 0)
+        val next = code.indexOf("\n    private fun ", at + 1)
+        return if (next < 0) code.substring(at) else code.substring(at, next)
+    }
+
+    /**
      * From a declaration to the start of the next one.
      *
      * ⚠️ [bodyOf] matches braces from the first `{`, which for an
@@ -496,6 +516,43 @@ class ScrollUntilVisibleWiringTest {
                 "describes: '$longest'. Describe the line; do not spell it.",
             longest.length < MAX_SHARED_RUN
         )
+    }
+
+    /**
+     * The diagnostic line carries both quantities the open report needs.
+     *
+     * A filed report establishes that `CLEARANCE_FRACTION` is applied to two
+     * bases in one flow — the shorter side for the clearance, the scroll axis
+     * for the swipe step — and deliberately stops short of calling the swipe
+     * wrong, because that needs a device the reporting lane does not have.
+     * Neither `surface` nor `step` was printed, so no face could settle it
+     * from captures it already keeps.
+     *
+     * ⚠️ This arm pins the INPUTS to that question, not an answer to it. If
+     * the two bases are later aligned, this stays green — which is correct:
+     * the line should carry both numbers either way.
+     */
+    @Test
+    fun `the unstick line reports the surface and the swipe step`() {
+        // ⚠️ `withoutComments`, NOT `codeOnly`. codeOnly strips string
+        // literals as well, so an emitted SPELLING is invisible in it — the
+        // first draft of this arm failed for exactly that reason, which is
+        // the third time this class has been written against text the
+        // literals had been removed from. The helper for it already existed
+        // on the line above; having the tool is not the same as reaching for
+        // it.
+        val body = literalBodyOf("unstickFromTrailingEdge")
+        // ⚠️ PIN THE EMITTED FIELD NAMES, NOT THE EXPRESSIONS THAT FEED THEM.
+        // The first draft asserted `surface.width()` and `surface.height()`
+        // appear — and they do, inside the `clearanceFor(...)` call that was
+        // already there. Deleting the whole `surface=` field left that arm
+        // green. A mutation found it; reading did not.
+        assertTrue("the swipe step must be reported", body.contains("step=\$step"))
+        assertTrue("the surface it was derived from must be reported too",
+            body.contains("surface=\${surface.width()}x\${surface.height()}"))
+        // The clearance was already there; without it the other two say
+        // nothing, because the report is about their RATIO.
+        assertTrue("clearance must stay", body.contains("clearanceFor("))
     }
 
     private companion object {
