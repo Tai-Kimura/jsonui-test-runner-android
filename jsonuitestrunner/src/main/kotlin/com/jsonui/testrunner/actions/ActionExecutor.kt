@@ -1177,6 +1177,17 @@ class ActionExecutor(
      * scroll is reverted when the target went away or ended up nearer the
      * edge. A test that passes today can only see the target in the same
      * place or further from the edge.
+     *
+     * 🚨 THAT GUARANTEE IS ABOUT POSITION AND NOTHING ELSE. Widening this to
+     * the scroll legs costs a lookup on every scrollUntilVisible, and a swipe
+     * plus up to [TargetSettle.BUDGET_MS] on every one that fires. Two faces
+     * pointed out, independently, that "only the timing changes" is a claim in
+     * the direction that hurts: on a suite running near a per-case or
+     * per-action timeout, a timing change and a pass/fail change are the same
+     * event. THE TIMEOUT HEADROOM IS NOT MEASURED — no face has reported how
+     * close to its limits it runs, and this repo cannot see that. Read it as
+     * "the position cannot get worse; the duration grows by an unmeasured
+     * amount", never as "this cannot redden a test".
      */
     private fun unstickFromTrailingEdge(id: String, containerId: String?, via: String) {
         val surface = (containerId?.let { cid ->

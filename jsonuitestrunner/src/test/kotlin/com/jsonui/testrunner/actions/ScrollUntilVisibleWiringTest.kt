@@ -159,6 +159,60 @@ class ScrollUntilVisibleWiringTest {
     }
 
     /**
+     * Exits of a function body. `return@label` leaves a lambda, not this
+     * function, and the trailing `throw` is the not-found path which must NOT
+     * run the clearance rule — so neither counts.
+     */
+    private fun exitCount(body: String): Int =
+        Regex("\\breturn\\b(?!@)").findAll(body).count()
+
+    private fun ruleCount(body: String): Int =
+        Regex("unstickFromTrailingEdge\\(").findAll(body).count()
+
+    /**
+     * [everyExitOfScrollUntilVisibleRunsTheClearanceRule] pins the ORDER of the
+     * calls that exist. It does not pin how many exits exist — so a FOURTH exit
+     * added with no clearance rule leaves it green, which is defect (c) exactly,
+     * unclosed in the direction the population grows. Measured by another lane
+     * against this very file: a synthetic early `return` reddened nothing.
+     *
+     * Deleting a call and adding an exit are the same defect seen from the two
+     * ends, so they need one arm each: the sequence catches the deletion, this
+     * catches the addition.
+     */
+    @Test
+    fun noExitCanBeAddedWithoutTheClearanceRule() {
+        val body = bodyOf("executeScrollUntilVisible")
+        assertEquals(
+            "every return in executeScrollUntilVisible must pass the clearance rule",
+            exitCount(body),
+            ruleCount(body)
+        )
+    }
+
+    /**
+     * The control the arm above needs. Counting exits is a NEW discriminator,
+     * and a discriminator with no control is the thing this whole release is
+     * about — so the counter is shown to move on synthetic bodies rather than
+     * trusted because the real file happens to agree with it today.
+     */
+    @Test
+    fun theExitCounterItselfMovesOnSyntheticBodies() {
+        val three = "{ return unstickFromTrailingEdge( return unstickFromTrailingEdge( " +
+            "return unstickFromTrailingEdge( }"
+        val fourExitsThreeRules = "{ return " + three.trim('{', '}', ' ') + " }"
+        assertEquals(3, exitCount(three))
+        assertEquals(3, ruleCount(three))
+        assertEquals("a fourth exit must be visible to the counter", 4, exitCount(fourExitsThreeRules))
+        assertEquals(3, ruleCount(fourExitsThreeRules))
+        // ...and the comparison the arm makes must actually separate them.
+        assertTrue(exitCount(three) == ruleCount(three))
+        assertFalse(exitCount(fourExitsThreeRules) == ruleCount(fourExitsThreeRules))
+        // A lambda escape is not an exit of the enclosing function.
+        assertEquals(1, exitCount("{ list.forEach { return@forEach }; return }"))
+    }
+
+    /**
      * (b) of the report: this helper is the LAST thing scrollUntilVisible
      * does, so its own swipe was the one motion no settle covered — the next
      * step tapped a sliding target. Both swipes must be followed by a settle.

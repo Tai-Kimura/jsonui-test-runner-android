@@ -93,7 +93,22 @@ object TargetSettle {
     const val AFTER_UNSTICK = "after-unstick"
     const val AFTER_REVERT = "after-revert"
 
-    /** One line per settle wait so a consumer can read whether targets ever move after being found. */
+    /**
+     * One line per settle wait so a consumer can read whether targets ever
+     * move after being found.
+     *
+     * 🚨 THE PREFIX `scrollUntilVisible '<id>'` IS SHARED WITH THE iOS DRIVER,
+     * which spells its scroll failure the same way and has no settle concept
+     * at all (ScrollDiagnosis.swift: "scrollUntilVisible '\(id)': scrolled
+     * both ways and it is still not hittable"). As of 1.15.0 only ANDROID puts
+     * a bracketed phase between the id and the colon, so a runbook that greps
+     * for the id followed immediately by a colon now matches iOS and misses
+     * Android — and reads as "the output disappeared" rather than "the format
+     * moved". Grep for the id alone, or for `[after-unstick]` by name.
+     *
+     * Found by a lane whose search window covered both drivers; this repo's
+     * own check had looked only at Android and at the CLI.
+     */
     fun settleLine(id: String, phase: String, samples: List<Box>, elapsedMs: Long): String =
         "scrollUntilVisible '$id' [$phase]: settled=${settled(samples)} after ${elapsedMs}ms, " +
             "moved ${movedPx(samples)}px over ${samples.size} sample(s)" +

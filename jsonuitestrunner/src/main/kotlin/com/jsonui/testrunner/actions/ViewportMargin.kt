@@ -77,7 +77,18 @@ object ViewportMargin {
      * — or gone. So the position is re-measured afterwards and kept only if
      * the target is still there AND no closer to the edge than before. A
      * change that can only leave the target where it was or further from the
-     * edge cannot redden a test that passes today.
+     * edge cannot redden a test that passes today ON POSITION.
+     *
+     * ⚠️ ON POSITION is the whole scope of that sentence, and 1.15.0 is where
+     * the distinction starts to matter: the rule now runs on the scroll legs
+     * too, so it fires far more often, and every firing costs a swipe and a
+     * settle. Where a suite runs near a timeout, longer and redder are the
+     * same event. The headroom is unmeasured.
+     *
+     * ⚠️ And the re-measure only means something if it reads a RESTING value.
+     * Until 1.15.0 the caller sampled it one waitForIdle into a fling — 1184
+     * against a resting 1157 in the reporting capture. The guard was sound and
+     * its input was not, which no test of this function could ever show.
      */
     @JvmStatic
     fun keepScrolledPosition(
