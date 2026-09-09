@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.jsonui.testrunner.models.TestStep
@@ -379,25 +380,55 @@ class AssertionExecutor(
     /**
      * Poll a check every 100ms until it passes or the timeout elapses.
      * The last failure (with the current actual value) is rethrown at timeout.
+     *
+     * 🚨 `StaleObjectException` IS RETRIED HERE, AND IT IS NAMED, NOT INHERITED.
+     * `assertText` polls because a state-driven UI updates bound text
+     * asynchronously; that same recomposition replaces the a11y node behind a
+     * handle this loop's `check` is holding, and uiautomator then raises
+     * `StaleObjectException` — which `javap` reports as
+     * `extends java.lang.RuntimeException`, NOT an `AssertionError`. Until
+     * 2026-09-09 the loop caught only `AssertionError`, so the one failure the
+     * poll exists to absorb was the one failure that escaped it: the poll was
+     * abandoned on first occurrence and the case fell back to whole-case retry
+     * (the run survives — the per-case catch is `Throwable` — so what is lost
+     * is the 100ms granularity, and the assertion's own message).
+     *
+     * ⚠️ Caught by NAME rather than by `RuntimeException`. The parent would
+     * absorb unrelated runtime failures into this loop and re-report them as a
+     * timeout, which hides defects instead of surviving a race. Adding a new
+     * transient type here is a deliberate act, not a side effect of widening.
+     *
+     * ⚠️ The throw at timeout is `last`, the exception that ACTUALLY ended the
+     * final attempt. Rethrowing a manufactured `AssertionError` would point the
+     * reader at a value comparison that never happened.
      */
     private fun pollUntil(timeout: Long, searchedId: String?, check: () -> Unit) {
         val startTime = System.currentTimeMillis()
         var debugLogged = false
+
+        // One body, two catch clauses: the retry policy lives in a single place
+        // so a future transient type cannot be handled one way here and another
+        // way three lines down.
+        fun retryOrRethrow(last: Throwable) {
+            if (System.currentTimeMillis() - startTime >= timeout) throw last
+
+            // Debug: dump hierarchy once after 2 seconds of element polling
+            if (searchedId != null && !debugLogged && System.currentTimeMillis() - startTime > 2000) {
+                debugLogged = true
+                dumpHierarchy(searchedId)
+            }
+
+            Thread.sleep(100)
+        }
 
         while (true) {
             try {
                 check()
                 return
             } catch (e: AssertionError) {
-                if (System.currentTimeMillis() - startTime >= timeout) throw e
-
-                // Debug: dump hierarchy once after 2 seconds of element polling
-                if (searchedId != null && !debugLogged && System.currentTimeMillis() - startTime > 2000) {
-                    debugLogged = true
-                    dumpHierarchy(searchedId)
-                }
-
-                Thread.sleep(100)
+                retryOrRethrow(e)
+            } catch (e: StaleObjectException) {
+                retryOrRethrow(e)
             }
         }
     }

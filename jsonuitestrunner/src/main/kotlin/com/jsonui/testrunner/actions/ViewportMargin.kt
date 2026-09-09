@@ -30,6 +30,23 @@ object ViewportMargin {
      * the trailing edge by. 12% ≈ one list row on the shapes measured, which
      * is what "the thing revealed below it" needs to land inside.
      *
+     * ⚠️ "SHORTER DIMENSION" IS RESOLVED PER CALL, NOT PER DEVICE. The surface
+     * is whatever [clearanceFor] is handed — for a container step it is that
+     * container's *visible* bounds, which by definition shrink when anything
+     * covers part of it. So the axis that is shorter can SWAP WITHIN ONE RUN on
+     * one device: a 1080-wide surface yields 129 while the same surface reduced
+     * to 1000 tall yields 120, and nothing about the device changed. Two
+     * clearances that differ are not evidence of a bug.
+     *
+     * 🚨 THIS CONSTANT HAS A SECOND USE WITH A DIFFERENT BASE. The corrective
+     * swipe in `ActionExecutor.unstickFromTrailingEdge` sizes its step as
+     * `surface.height() * CLEARANCE_FRACTION` — height, not the shorter side.
+     * The two agree in landscape and diverge in portrait (1080x2400: clearance
+     * 129, step 288, so the swipe travels 576px to repair a 129px shortfall),
+     * and [MAX_CLEARANCE_PX] caps the clearance while nothing caps the step.
+     * Filed rather than changed: making them agree is a behaviour change and
+     * this repo has no device to measure the shorter swipe against.
+     *
      * ⚠️ Not tuned against the reporting face's flow — that flow is on a
      * consumer tree this repo cannot run. It is a floor chosen to be smaller
      * than a row and larger than the few pixels that produced the report.

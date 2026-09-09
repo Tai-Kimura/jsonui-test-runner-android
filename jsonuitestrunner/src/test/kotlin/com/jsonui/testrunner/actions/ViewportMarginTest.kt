@@ -94,6 +94,22 @@ class ViewportMarginTest {
     }
 
     @Test
+    fun `the clearance follows the shorter side, so swapping the axes changes nothing`() {
+        // The KDoc's "shorter dimension" as behaviour rather than prose. This is
+        // also why two clearances can differ within one run on one device: the
+        // surface handed in is a container's VISIBLE bounds, so whichever axis
+        // is shorter can change when something covers part of it.
+        assertEquals(
+            ViewportMargin.clearanceFor(surfaceHeight = 2400, surfaceWidth = 1080),
+            ViewportMargin.clearanceFor(surfaceHeight = 1080, surfaceWidth = 2400)
+        )
+        assertEquals(129, ViewportMargin.clearanceFor(2400, 1080))
+        // A surface reduced to 1000 on its shorter axis yields a different, and
+        // equally correct, clearance — the observation that started this.
+        assertEquals(120, ViewportMargin.clearanceFor(1080, 1000))
+    }
+
+    @Test
     fun `a scroll that changed nothing is kept rather than undone`() {
         // Equal is kept: reverting a no-op would spend a second swipe to
         // return to where it already is, and every extra swipe is a chance
