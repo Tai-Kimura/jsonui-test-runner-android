@@ -118,4 +118,37 @@ class ViewportMarginTest {
             ViewportMargin.keepScrolledPosition(
                 before = 1000, after = 1000, surfaceBottom = bottom))
     }
+
+    /**
+     * The boundary, which is the whole reason this predicate is not
+     * `Rect.contains`.
+     *
+     * ⚠️ `bottom == surfaceBottom` is INSIDE. A face measured
+     * `flush 1307 of 1307` on a node its layout audit confirmed to be a
+     * descendant of the named container, and the unstick moved it 248px. A
+     * gate that dropped it would suppress a working scroll AND accuse a
+     * correct test of naming the wrong container — two failures, both silent.
+     */
+    @Test
+    fun `a target resting exactly on the edge is inside`() {
+        assertFalse(ViewportMargin.isOutsideTrailingEdge(1307, 1307))
+        assertFalse(ViewportMargin.isOutsideTrailingEdge(1306, 1307))
+        assertTrue(ViewportMargin.isOutsideTrailingEdge(1308, 1307))
+    }
+
+    /**
+     * The two real captures, kept as data rather than as prose.
+     *
+     * ⚠️ Both came from the same run on the same face. The one that must be
+     * skipped is 168px beyond; the one that must NOT be skipped is 0px
+     * beyond. Any predicate that cannot separate 0 from 168 is the wrong
+     * predicate, whatever it is spelled.
+     */
+    @Test
+    fun `the measured outside case and the measured edge case separate`() {
+        assertTrue("save_button: 168px beyond its container",
+            ViewportMargin.isOutsideTrailingEdge(2295, 2127))
+        assertFalse("volume_field: on the edge, and the unstick moved it 248px",
+            ViewportMargin.isOutsideTrailingEdge(1307, 1307))
+    }
 }

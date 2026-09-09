@@ -353,12 +353,21 @@ class ScrollUntilVisibleWiringTest {
         val body = codeOnly(bodyOf("unstickFromTrailingEdge"))
         val seq = sequenceOf(
             body,
-            listOf("surface.contains(", "warningHandler", "isFlushAgainstTrailingEdge(")
+            listOf("isOutsideTrailingEdge(", "warningHandler",
+                   "isFlushAgainstTrailingEdge(")
         )
         assertEquals(
-            "containment must be tested, reported, and come before the edge test",
-            listOf("surface.contains(", "warningHandler", "isFlushAgainstTrailingEdge("),
+            "the outside test must run, report, and come before the edge test",
+            listOf("isOutsideTrailingEdge(", "warningHandler",
+                   "isFlushAgainstTrailingEdge("),
             seq
         )
+        // ⚠️ And it must be the ONE-SIDED predicate. `Rect.contains` tests four
+        // edges for a claim about one, and `visibleBounds` is clipped to the
+        // screen rather than to the container — so a target inside a
+        // horizontally scrollable container would be dropped for a reason a
+        // vertical swipe never had anything to do with.
+        assertFalse("the four-sided test must not come back",
+            body.contains("surface.contains("))
     }
 }

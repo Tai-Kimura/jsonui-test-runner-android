@@ -71,6 +71,37 @@ object ViewportMargin {
      * Making this symmetric would add scrolls to passing tests for a shape
      * nobody has reported.
      */
+    /**
+     * True when *targetBottom* is BEYOND *surfaceBottom* — outside the
+     * surface a scroll of that surface can move.
+     *
+     * 🚨 STRICTLY BEYOND. `bottom == surfaceBottom` is a target resting
+     * exactly on the edge, which is INSIDE and which the unstick moves
+     * normally: one face measured `flush 1307 of 1307` travel 248px on a node
+     * its own layout audit confirmed to be a descendant of the named
+     * container. An inclusive-vs-exclusive slip here does not merely skip a
+     * no-op; it (a) suppresses an unstick that was working and (b) accuses a
+     * CORRECT test of naming the wrong container.
+     *
+     * ⚠️ AND IT IS DELIBERATELY ONE-SIDED. The first draft used
+     * `Rect.contains`, which tests all four edges — a four-sided test for a
+     * one-sided claim. `visibleBounds` is clipped to the SCREEN, not to the
+     * container, so a target inside a horizontally scrollable container, or
+     * one wider than its container, fails `contains` for a reason that has
+     * nothing to do with whether a VERTICAL scroll can reach it. The rule
+     * only ever swipes vertically, so only the vertical relation may gate it.
+     *
+     * ⚠️ Raised by a face 2026-09-09 BEFORE this shipped, from a boundary
+     * case in its own capture. Its stated mechanism was that
+     * `Rect.contains(Rect)` excludes the bottom edge; measured, it does not
+     * (`bottom >= r.bottom`, "inside or equal to"). The conclusion was right
+     * and the mechanism was not, which is why the arm below pins the
+     * BOUNDARY rather than the spelling of the call.
+     */
+    @JvmStatic
+    fun isOutsideTrailingEdge(targetBottom: Int, surfaceBottom: Int): Boolean =
+        targetBottom > surfaceBottom
+
     @JvmStatic
     fun isFlushAgainstTrailingEdge(
         targetBottom: Int,

@@ -1229,12 +1229,20 @@ class ActionExecutor(
         // ever going red. The line names both ids, because the fix is in the
         // TEST, not here.
         //
+        // ⚠️ ONE-SIDED ON PURPOSE. The first draft used `surface.contains(before)`
+        // — four edges for a one-sided claim. `visibleBounds` is clipped to the
+        // SCREEN, not to this container, so a target inside a horizontally
+        // scrollable container fails `contains` for a reason a vertical swipe
+        // was never going to address. And a face raised a boundary case before
+        // this shipped: `flush 1307 of 1307`, a true descendant, moved 248px.
+        // Only `bottom > surface.bottom` is the thing the rule cannot fix.
+        //
         // ⚠️ And this sees only part of it. A container that cannot hold the
         // target still says nothing when the target is not near the trailing
         // edge — those never reach this function. The complete audit is
         // static (is `container` an ancestor of `id` in the layout?) and
         // belongs to the test validator, not to a runtime line.
-        if (!surface.contains(before)) {
+        if (ViewportMargin.isOutsideTrailingEdge(before.bottom, surface.bottom)) {
             warningHandler?.invoke(
                 "scrollUntilVisible '$id': target is not inside " +
                     (containerId?.let { "container '$it'" } ?: "the app surface") +
