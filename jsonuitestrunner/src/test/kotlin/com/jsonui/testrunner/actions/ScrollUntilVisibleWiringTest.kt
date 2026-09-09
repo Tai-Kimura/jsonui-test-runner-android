@@ -245,4 +245,93 @@ class ScrollUntilVisibleWiringTest {
             seq
         )
     }
+
+    // ---------------------------------------------------------------- 1.15.1
+
+    /**
+     * Every re-find on this path reads its bounds through the stale-safe
+     * helper, and only the helper itself holds a bare read.
+     *
+     * 🚨 `visibleBounds` reads the node behind the handle `findObject` just
+     * returned. When that node is replaced in between, uiautomator raises
+     * `StaleObjectException` rather than returning null — and [boundsOf]'s
+     * callers all already decide what to do about "it is not there". The
+     * settle loop says so in as many words. It only ever saw one spelling.
+     *
+     * ⚠️ This counts CALL SITES, not the rule: a fix applied to the site
+     * someone remembered reaches only that site. 1.15.0 shipped a settle that
+     * polls this value up to 20 times per call WHILE THE UI IS MOVING, and a
+     * throw from it fails the whole test through [execute]'s retry — an
+     * advisory helper that only prints must not be able to do that.
+     */
+    @Test
+    fun `every re-find reads bounds through the stale-safe helper`() {
+        val code = codeOnly(source)
+        val bare = Regex("""findObject\(By\.res\([A-Za-z]+\)\)\?\.visibleBounds""")
+            .findAll(code).count()
+        assertEquals(
+            "exactly one bare read may remain, and it is the one inside boundsOf",
+            1, bare
+        )
+        assertTrue("boundsOf must exist", code.contains("private fun boundsOf(id: String): Rect?"))
+        // Four or more consumers, or the helper was added and not adopted.
+        assertTrue(
+            "boundsOf is declared but barely used: ${Regex("boundsOf\\(").findAll(code).count()}",
+            Regex("boundsOf\\(").findAll(code).count() >= 6
+        )
+    }
+
+    /**
+     * The helper turns the exception into the null its callers handle.
+     *
+     * ⚠️ Existence of a `try` is not the property — the property is that the
+     * caught type is `StaleObjectException` and that the handler yields
+     * `null` rather than rethrowing or returning an empty rect. An empty rect
+     * would pass `takeIf { !it.isEmpty }` at one site and fail it at another.
+     */
+    /**
+     * From a declaration to the start of the next one.
+     *
+     * ⚠️ [bodyOf] matches braces from the first `{`, which for an
+     * EXPRESSION-BODIED function (`= try { … } catch { … }`) closes at the end
+     * of the `try` — before the handler this arm is about. A window that stops
+     * short of the claim reports absence, and absence here looked exactly like
+     * "the catch was never written".
+     */
+    private fun declOf(name: String): String {
+        val code = codeOnly(source)
+        val at = code.indexOf("private fun $name(")
+        assertTrue("declaration of $name not found", at >= 0)
+        val next = code.indexOf("private fun ", at + 1)
+        return if (next < 0) code.substring(at) else code.substring(at, next)
+    }
+
+    @Test
+    fun `boundsOf converts a stale node into the absent case`() {
+        val body = declOf("boundsOf")
+        val seq = sequenceOf(
+            body,
+            listOf("device.findObject(", "catch (e: StaleObjectException)", "null")
+        )
+        assertEquals(
+            listOf("device.findObject(", "catch (e: StaleObjectException)", "null"),
+            seq
+        )
+        assertFalse("the handler must not rethrow", body.contains("throw"))
+    }
+
+    /**
+     * The settle loop — the site 1.15.0 added — is one of the consumers.
+     *
+     * ⚠️ Named separately from the count above because the count is satisfied
+     * by any six sites. This one is the site whose throw reaches [execute],
+     * so it is the one that must not regress even if the others do.
+     */
+    @Test
+    fun `the settle loop reads through the helper and breaks on absent`() {
+        val body = codeOnly(bodyOf("awaitTargetSettled"))
+        assertTrue("the settle must not re-find bare", !body.contains("findObject("))
+        assertTrue("the settle must use boundsOf", body.contains("boundsOf(id)"))
+        assertTrue("absent still ends the loop", body.contains("?: break"))
+    }
 }

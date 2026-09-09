@@ -687,7 +687,7 @@ class ActionExecutor(
         // 2026-09-03: a header-sized rect at the left edge turned every swipe
         // into a back gesture, and the plain "not found" read as flaky).
         val explicitContainer = step.container?.let { containerId ->
-            device.findObject(By.res(containerId))?.visibleBounds
+            boundsOf(containerId)
                 ?.takeIf { !it.isEmpty }
                 ?.let { SurfaceBounds(it, "container '$containerId'") }
         }
@@ -1207,9 +1207,9 @@ class ActionExecutor(
      */
     private fun unstickFromTrailingEdge(id: String, containerId: String?, via: String) {
         val surface = (containerId?.let { cid ->
-            device.findObject(By.res(cid))?.visibleBounds?.takeIf { !it.isEmpty }
+            boundsOf(cid)?.takeIf { !it.isEmpty }
         } ?: appSurfaceBounds().rect)
-        val before = device.findObject(By.res(id))?.visibleBounds ?: return
+        val before = boundsOf(id) ?: return
         if (!ViewportMargin.isFlushAgainstTrailingEdge(
                 before.bottom, surface.bottom, surface.height(), surface.width())) {
             return
@@ -1246,7 +1246,7 @@ class ActionExecutor(
         //       travel after this function returned, 1px in the 5s after the
         //       tap. 1 failure in 5 identical runs.
         awaitTargetSettled(id, TargetSettle.AFTER_UNSTICK)
-        val after = device.findObject(By.res(id))?.visibleBounds
+        val after = boundsOf(id)
         val keep = ViewportMargin.keepScrolledPosition(
             before.bottom, after?.bottom, surface.bottom)
         if (!keep) {
@@ -1289,12 +1289,52 @@ class ActionExecutor(
             "after=${after?.bottom}, kept=$keep")
     }
 
+    /**
+     * Visible bounds of [id], or null when it is not there.
+     *
+     * 🚨 STALE IS THE SAME FACT AS ABSENT, AND ONLY ONE SPELLING WAS HANDLED.
+     * `UiObject2.visibleBounds` reads the accessibility node behind the handle
+     * `findObject` just returned; when that node is replaced in between,
+     * uiautomator raises `StaleObjectException` instead of returning null.
+     * Every caller here already decides what to do about "it is not there" —
+     * [awaitTargetSettled] says so in as many words (`?: break`, "Gone
+     * mid-animation (recomposed away)"). It never saw the other spelling.
+     *
+     * ⚠️ THE COST OF MISSING IT IS NOT A LOST READING. [awaitTargetSettled]
+     * returns Unit and only prints: it is ADVISORY. But a throw from it
+     * propagates to [execute], which retries the WHOLE action three times and
+     * then fails the test. An advisory helper that can fail a test is the
+     * defect, whatever its rate. 1.15.0 is where it became reachable — the
+     * settle polls this value every [TargetSettle.SAMPLE_INTERVAL_MS] for up
+     * to [TargetSettle.BUDGET_MS] (up to 20 reads, median 2 as measured on
+     * two faces), and the poll runs ONLY WHILE THE UI IS MOVING, which is the
+     * one condition under which nodes are recycled. Before 1.15.0 this place
+     * was a single `device.waitForIdle()`: zero node reads.
+     *
+     * ⚠️ Reported 2026-09-09 by two faces that saw `StaleObjectException` on
+     * runs of 1.15.0. NEITHER COULD LOCALISE ITS FAILURES TO THIS SITE, and
+     * this fix does not claim to repair them. It is the consistency repair
+     * and it stands on its own: one spelling of "gone" was handled and the
+     * other was not.
+     *
+     * ⚠️ The reads it does NOT cover are the ones on a handle the caller
+     * already holds (an element passed in, a text node) — those belong to
+     * [execute]'s retry, which restarts the action that obtained the handle.
+     * This helper is for the re-finds, where "gone" is an answer rather than
+     * a failure.
+     */
+    private fun boundsOf(id: String): Rect? = try {
+        device.findObject(By.res(id))?.visibleBounds
+    } catch (e: StaleObjectException) {
+        null
+    }
+
     private fun awaitTargetSettled(id: String, phase: String) {
         val startedAt = System.currentTimeMillis()
         val samples = mutableListOf<Box>()
         while (System.currentTimeMillis() - startedAt < TargetSettle.BUDGET_MS) {
             // Gone mid-animation (recomposed away): nothing to settle on.
-            val b = device.findObject(By.res(id))?.visibleBounds ?: break
+            val b = boundsOf(id) ?: break
             samples.add(Box(b.left, b.top, b.right, b.bottom))
             if (TargetSettle.settled(samples)) break
             Thread.sleep(TargetSettle.SAMPLE_INTERVAL_MS)
@@ -1307,7 +1347,7 @@ class ActionExecutor(
      * [id], as one line for a failure message (see [TargetSettle.describe]).
      */
     private fun describeTarget(id: String): String {
-        val visible = device.findObject(By.res(id))?.visibleBounds
+        val visible = boundsOf(id)
             ?.let { Box(it.left, it.top, it.right, it.bottom) }
         val node = findByViewId(id)
         val full = node?.let { n -> Rect().also { n.getBoundsInScreen(it) } }
