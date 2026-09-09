@@ -673,8 +673,8 @@ class ActionExecutor(
         val timeout = step.timeout?.toLong() ?: 20000L
 
         if (device.findObject(By.res(id)) != null) {
-            awaitTargetSettled(id)
-            unstickFromTrailingEdge(id, step.container)
+            awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            unstickFromTrailingEdge(id, step.container, UnstickVia.ENTRY)
             return
         }
 
@@ -705,7 +705,8 @@ class ActionExecutor(
         // ABOVE the viewport (intermittent by a few px of scroll position).
         if (searchInDirection(step.container, containerBounds, id, direction,
                 System.currentTimeMillis() + timeout)) {
-            awaitTargetSettled(id)
+            awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            unstickFromTrailingEdge(id, step.container, UnstickVia.SCROLLED)
             return
         }
 
@@ -715,7 +716,8 @@ class ActionExecutor(
         val reverse = oppositeDirection(direction)
         if (searchInDirection(step.container, containerBounds, id, reverse,
                 System.currentTimeMillis() + maxOf(timeout / 2, 6000L))) {
-            awaitTargetSettled(id)
+            awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            unstickFromTrailingEdge(id, step.container, UnstickVia.SCROLLED)
             return
         }
 
@@ -1155,11 +1157,20 @@ class ActionExecutor(
      * One extra scroll when the target stopped FLUSH against the trailing
      * edge, kept only if it improved the position.
      *
-     * See [ViewportMargin]. The early return above is satisfied by existence,
-     * so a target peeking a few pixels above the bottom is "found" and the
-     * search stops there. That is fine until operating it reveals something
-     * directly below it, which then lands off-screen and is not projected —
-     * producing a census identical to the operation having done nothing.
+     * See [ViewportMargin]. Every exit of scrollUntilVisible is satisfied by
+     * EXISTENCE, so a target peeking a few pixels above the bottom is "found"
+     * and the search stops there. That is fine until operating it reveals
+     * something directly below it, which then lands off-screen and is not
+     * projected — producing a census identical to the operation having done
+     * nothing.
+     *
+     * 🚨 CALLED FROM ALL THREE EXITS ([UnstickVia]). 1.14.0 called it from
+     * one: the early return taken when the target was already visible. The
+     * two scroll legs return the instant the target APPEARS — which, scrolling
+     * down, is the instant it has entered from the trailing edge — so the exits
+     * most likely to leave a target flush against that edge were the exits the
+     * rule never reached. The rule was covered per-RULE and shipped with two of
+     * its three call sites bare.
      *
      * ⚠️ Speculative by construction, so it is guarded rather than trusted:
      * [ViewportMargin.keepScrolledPosition] re-measures afterwards and the
@@ -1167,7 +1178,7 @@ class ActionExecutor(
      * edge. A test that passes today can only see the target in the same
      * place or further from the edge.
      */
-    private fun unstickFromTrailingEdge(id: String, containerId: String?) {
+    private fun unstickFromTrailingEdge(id: String, containerId: String?, via: String) {
         val surface = (containerId?.let { cid ->
             device.findObject(By.res(cid))?.visibleBounds?.takeIf { !it.isEmpty }
         } ?: appSurfaceBounds().rect)
@@ -1181,13 +1192,41 @@ class ActionExecutor(
         val step = (surface.height() * ViewportMargin.CLEARANCE_FRACTION).toInt()
             .coerceAtLeast(1)
         device.swipe(cx, cy + step, cx, cy - step, 20)
-        device.waitForIdle()
+        // 🚨 NOT `device.waitForIdle()`. This swipe is 20 steps, which is a
+        // FLING, and waitForIdle waits on accessibility events Compose does
+        // not send under a bare UiAutomator (isEnabled=false, measured
+        // 2026-09-04) — the same fact [TargetSettle] was written for. Two
+        // separate defects came out of the bare wait that used to be here
+        // (reported 2026-09-09, capture on a landscape tablet):
+        //
+        //   (a) THE READING BELOW WAS TAKEN MID-FLING. `after` is the whole
+        //       basis of the "never make it worse" guarantee in
+        //       [ViewportMargin.keepScrolledPosition] — the position is
+        //       re-measured and the scroll reverted when it did not improve.
+        //       Measuring a target that is still moving does not re-measure
+        //       anything; it samples the animation. The reporter's capture
+        //       logged `after=1184` and the target came to REST at ~1157, so
+        //       the guard ruled on a number 27px away from the fact it claims
+        //       to check. It can keep a scroll that ended worse and revert one
+        //       that ended better; both directions are reachable.
+        //
+        //   (b) THE STEP RETURNED WITH THE TARGET STILL MOVING. This function
+        //       is the LAST thing scrollUntilVisible does, so its motion was
+        //       the one motion no settle covered. The next step's tap then
+        //       landed on a sliding target, Compose cancelled the press, and
+        //       the press itself stopped the animation — leaving the target
+        //       parked where the failed tap caught it. Measured: 27px of
+        //       travel after this function returned, 1px in the 5s after the
+        //       tap. 1 failure in 5 identical runs.
+        awaitTargetSettled(id, TargetSettle.AFTER_UNSTICK)
         val after = device.findObject(By.res(id))?.visibleBounds
         val keep = ViewportMargin.keepScrolledPosition(
             before.bottom, after?.bottom, surface.bottom)
         if (!keep) {
             device.swipe(cx, cy - step, cx, cy + step, 20)
-            device.waitForIdle()
+            // The rollback is a fling too, and it is then the last motion of
+            // the step — (b) above applies to this branch unchanged.
+            awaitTargetSettled(id, TargetSettle.AFTER_REVERT)
         }
         // 🚨 THE LINE A FACE READS TO TELL "THE RULE DID NOT FIRE" FROM "I
         // COULD NOT SEE IT". Reported 2026-09-09 by the face that accepted
@@ -1217,13 +1256,13 @@ class ActionExecutor(
                 "stdio redirection is on — so an absent line is not evidence " +
                 "the rule did not fire."
         )
-        println("[ActionExecutor] unstick '$id': flush at ${before.bottom} of " +
+        println("[ActionExecutor] unstick '$id' [$via]: flush at ${before.bottom} of " +
             "${surface.bottom}, clearance=" +
             "${ViewportMargin.clearanceFor(surface.height(), surface.width())}, " +
             "after=${after?.bottom}, kept=$keep")
     }
 
-    private fun awaitTargetSettled(id: String) {
+    private fun awaitTargetSettled(id: String, phase: String) {
         val startedAt = System.currentTimeMillis()
         val samples = mutableListOf<Box>()
         while (System.currentTimeMillis() - startedAt < TargetSettle.BUDGET_MS) {
@@ -1233,7 +1272,7 @@ class ActionExecutor(
             if (TargetSettle.settled(samples)) break
             Thread.sleep(TargetSettle.SAMPLE_INTERVAL_MS)
         }
-        println("[ActionExecutor] " + TargetSettle.settleLine(id, samples, System.currentTimeMillis() - startedAt))
+        println("[ActionExecutor] " + TargetSettle.settleLine(id, phase, samples, System.currentTimeMillis() - startedAt))
     }
 
     /**

@@ -76,9 +76,49 @@ object TargetSettle {
         return sb.toString()
     }
 
-    /** One line per scrollUntilVisible so a consumer can read whether targets ever move after being found. */
-    fun settleLine(id: String, samples: List<Box>, elapsedMs: Long): String =
-        "scrollUntilVisible '$id': settled=${settled(samples)} after ${elapsedMs}ms, " +
+    /**
+     * Which motion a settle wait is waiting out. `scrollUntilVisible` now
+     * prints up to three settle lines per call, and without a label they are
+     * indistinguishable — a face reading the log cannot tell "the target was
+     * still sliding when we found it" from "our own clearance swipe was still
+     * flinging".
+     *
+     * 📌 Deliberately coarse. The question a reader asks is WHICH MOTION this
+     * waited out, and these three are the three motions. The call sites are
+     * finer than that (primary leg / reverse leg both arrive via [ON_ARRIVAL])
+     * and labelling at THAT grain would invent distinctions the question does
+     * not have — see the sibling note on [UnstickVia].
+     */
+    const val ON_ARRIVAL = "on-arrival"
+    const val AFTER_UNSTICK = "after-unstick"
+    const val AFTER_REVERT = "after-revert"
+
+    /** One line per settle wait so a consumer can read whether targets ever move after being found. */
+    fun settleLine(id: String, phase: String, samples: List<Box>, elapsedMs: Long): String =
+        "scrollUntilVisible '$id' [$phase]: settled=${settled(samples)} after ${elapsedMs}ms, " +
             "moved ${movedPx(samples)}px over ${samples.size} sample(s)" +
             (samples.lastOrNull()?.let { ", resting ${it.toShortString()}" } ?: "")
+}
+
+/**
+ * Which EXIT of `scrollUntilVisible` ran the trailing-edge clearance rule.
+ *
+ * 1.14.0 shipped that rule on one exit of three: the early return taken when
+ * the target was ALREADY visible on entry. The two scroll legs — which return
+ * the instant the target appears, i.e. the instant it has entered from the
+ * trailing edge — never ran it. That is the shape the rule was written for,
+ * and it was the one shape the rule could not reach.
+ *
+ * 📌 Two values, not three. Both scroll legs (primary and reverse) report
+ * [SCROLLED]: the question a reader asks is "did the rule fire on a target I
+ * scrolled to, or on one that was already there", and splitting the legs
+ * would be an identifier finer than the question — which manufactures
+ * distinctions rather than answering it.
+ */
+object UnstickVia {
+    /** The target was already in the projection when the step began. */
+    const val ENTRY = "entry"
+
+    /** The target appeared during a scroll leg (primary or reverse). */
+    const val SCROLLED = "scrolled"
 }

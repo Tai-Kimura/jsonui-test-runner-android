@@ -69,14 +69,46 @@ class TargetSettleTest {
 
     @Test
     fun settleLineCarriesWhatAConsumerNeedsToReadMovement() {
-        val line = TargetSettle.settleLine("t", listOf(full, full.copy(top = 227, bottom = 309), full.copy(top = 227, bottom = 309)), 210)
+        val line = TargetSettle.settleLine("t", TargetSettle.ON_ARRIVAL, listOf(full, full.copy(top = 227, bottom = 309), full.copy(top = 227, bottom = 309)), 210)
         assertEquals(
-            "scrollUntilVisible 't': settled=true after 210ms, moved 10px over 3 sample(s), resting [42,227][1038,309]",
+            "scrollUntilVisible 't' [on-arrival]: settled=true after 210ms, moved 10px over 3 sample(s), resting [42,227][1038,309]",
             line
         )
         assertEquals(
-            "scrollUntilVisible 't': settled=false after 2000ms, moved 0px over 0 sample(s)",
-            TargetSettle.settleLine("t", emptyList(), 2000)
+            "scrollUntilVisible 't' [on-arrival]: settled=false after 2000ms, moved 0px over 0 sample(s)",
+            TargetSettle.settleLine("t", TargetSettle.ON_ARRIVAL, emptyList(), 2000)
         )
+    }
+
+    /**
+     * scrollUntilVisible prints up to THREE settle lines per call as of
+     * 1.15.0. Without the phase they are the same sentence about different
+     * motions, and a face reading the log cannot tell "the target was still
+     * sliding when we found it" from "our own clearance swipe was still
+     * flinging" — which are opposite diagnoses with opposite fixes.
+     */
+    @Test
+    fun eachSettleLineNamesWhichMotionItWaitedOut() {
+        val phases = listOf(
+            TargetSettle.ON_ARRIVAL, TargetSettle.AFTER_UNSTICK, TargetSettle.AFTER_REVERT)
+        assertEquals("phases must be distinct", phases.size, phases.toSet().size)
+        val lines = phases.map { TargetSettle.settleLine("t", it, listOf(full, full), 5) }
+        assertEquals("distinct phases must produce distinct lines", lines.size, lines.toSet().size)
+        assertTrue(lines[0].startsWith("scrollUntilVisible 't' [on-arrival]:"))
+        assertTrue(lines[1].startsWith("scrollUntilVisible 't' [after-unstick]:"))
+        assertTrue(lines[2].startsWith("scrollUntilVisible 't' [after-revert]:"))
+    }
+
+    /**
+     * The clearance rule's own label. Two values on purpose: the reader's
+     * question is "did it fire on a target I scrolled to, or one that was
+     * already there". The primary and reverse scroll legs are two call sites
+     * and one answer, so they share [UnstickVia.SCROLLED].
+     */
+    @Test
+    fun unstickViaIsAsCoarseAsTheQuestionItAnswers() {
+        assertEquals("entry", UnstickVia.ENTRY)
+        assertEquals("scrolled", UnstickVia.SCROLLED)
+        assertFalse(UnstickVia.ENTRY == UnstickVia.SCROLLED)
     }
 }
