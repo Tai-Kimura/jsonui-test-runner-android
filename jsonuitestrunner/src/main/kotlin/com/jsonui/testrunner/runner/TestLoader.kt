@@ -65,7 +65,13 @@ class TestLoader {
     }
 
     /**
-     * Load a test from a file path
+     * Load a test from a file path.
+     *
+     * This is the TOP-LEVEL entry: the file it loads owns the base that
+     * relative references resolve against. A screen test run on its own
+     * resolves against its own directory; a flow resolves against the
+     * flow's. Reading a file BECAUSE a flow referenced it is not a load in
+     * this sense — see [readTestFile].
      */
     fun load(path: String): LoadedTest {
         val file = File(path)
@@ -74,8 +80,23 @@ class TestLoader {
         }
         // Store base path for file reference resolution
         basePath = file.parent
-        return parseTest(file.readText(), path)
+        return readTestFile(file, path)
     }
+
+    /**
+     * Read and parse a test file WITHOUT touching the base.
+     *
+     * [resolveFileReference] used to go through [load], which set [basePath]
+     * unconditionally — so the first `file:` step of a flow moved the base
+     * from `tests/flows/` to `tests/screens/<first>/`, and the second step
+     * (a different screen) looked under `tests/screens/screens/<second>/`
+     * and was "not found". Referencing the same screen twice passed by
+     * accident (`<base>/<ref>.test.json` existed), which is why the defect
+     * only surfaced when a flow crossed two screens. The web and iOS
+     * drivers had the same shape (one ticket, three faces).
+     */
+    private fun readTestFile(file: File, path: String): LoadedTest =
+        parseTest(file.readText(), path)
 
     /**
      * Load a test from assets
@@ -161,7 +182,8 @@ class TestLoader {
      */
     fun resolveFileReference(fileRef: String): ScreenTest {
         val url = resolveFileReferenceURL(fileRef)
-        val loadedTest = load(url)
+        // The base stays at the flow's directory: a reference is read, not loaded.
+        val loadedTest = readTestFile(File(url), url)
 
         return when (loadedTest) {
             is LoadedTest.Screen -> loadedTest.test
