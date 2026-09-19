@@ -56,6 +56,17 @@ object ViewportMargin {
     /** No clearance is demanded beyond this many pixels, whatever the size. */
     const val MAX_CLEARANCE_PX = 240
 
+    /**
+     * Where a target the driver had to move ends up: its trailing side this
+     * many clearances from the trailing edge. Three, not two: one clearance
+     * is "about one list row", and the reporting page has a segmented
+     * control between its section heading and its first row — measured
+     * 2026-09-20, a landing two clearances up left the first row on the
+     * edge (6px inside), three leaves it a row clear. The old fling landed
+     * targets 500–700px up by accident; this is the same headroom on purpose.
+     */
+    const val LANDING_CLEARANCES = 3
+
     @JvmStatic
     fun clearanceFor(surfaceHeight: Int, surfaceWidth: Int): Int {
         val shorter = minOf(surfaceHeight, surfaceWidth).coerceAtLeast(0)
@@ -113,6 +124,29 @@ object ViewportMargin {
         val clearance = clearanceFor(surfaceHeight, surfaceWidth)
         if (clearance <= 0) return false
         return targetBottom > surfaceBottom - clearance
+    }
+
+    /**
+     * How far the corrective drag travels, in px: enough to land the target's
+     * bottom [LANDING_CLEARANCES] clearances above the trailing edge, wherever
+     * inside the clearance band it started. `(LANDING_CLEARANCES - 1) *
+     * clearance + shortfall`, so between two and three clearances — never a
+     * screenful (387px at most on a 1080-wide phone).
+     *
+     * Until 1.15.5 the motion was `2 * surface.height() * CLEARANCE_FRACTION`
+     * flung in 20 steps: 492px nominal on a 1080x2400 phone, measured 613–645px
+     * of travel with a 220–350ms tail (the release velocity of a 100ms swipe
+     * is a fling), and its rollback 520–645px the other way. A repair sized
+     * for a 129px shortfall was moving the page by half a screen twice, and
+     * the two flings did not cancel — which is how a target that was FOUND
+     * could be returned off-screen (2026-09-19, a phone lane, 1 run in 4).
+     * The same drag sized to the clearance moved 125–127px in three runs.
+     */
+    @JvmStatic
+    fun unstickTravel(targetBottom: Int, surfaceBottom: Int, clearance: Int): Int {
+        if (clearance <= 0) return 0
+        val shortfall = (targetBottom - (surfaceBottom - clearance)).coerceIn(0, clearance)
+        return (LANDING_CLEARANCES - 1) * clearance + shortfall
     }
 
     /**

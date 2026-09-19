@@ -269,6 +269,16 @@ class ScrollUntilVisibleWiringTest {
     @Test
     fun everyMotionTheClearanceRuleMakesIsSettledBeforeItIsMeasured() {
         val body = bodyOf("unstickFromTrailingEdge")
+        // 1.15.5: both motions are the DRAG form ([UnstickMotion.path] +
+        // [UnstickMotion.STEPS]) — a bare 5-argument `device.swipe(x, y, x,
+        // y, 20)` releases at fling velocity, which is the reported
+        // overshoot. Two is the count: the clearance scroll and the rollback.
+        assertEquals("both motions go through UnstickMotion.path",
+            2, Regex(Regex.escape("device.swipe(UnstickMotion.path(")).findAll(body).count())
+        assertEquals("no bare coordinate swipe remains in the rule",
+            0, Regex(Regex.escape("device.swipe(cx,")).findAll(body).count())
+        assertEquals("the step count is the helper's constant, not a literal",
+            2, Regex(Regex.escape("UnstickMotion.STEPS)")).findAll(body).count())
         assertFalse(
             "waitForIdle does not wait out a Compose fling under a bare UiAutomator",
             body.contains("waitForIdle")
@@ -287,6 +297,77 @@ class ScrollUntilVisibleWiringTest {
             ),
             seq
         )
+    }
+
+    // ---------------------------------------------------------------- 1.15.5
+
+    /**
+     * The step's promise is visibility, and the rule is the last thing that
+     * can break it. Reported 2026-09-19: scrollUntilVisible returned success
+     * and the next step's failure text showed a projection of the far end of
+     * the page — the target had been found, moved by the clearance rule's
+     * fling (and its fling rollback), and lost. Nothing on that path said so.
+     *
+     * So after the LAST settle, the function re-reads the target and, if it
+     * is gone, says so on the warning channel with the numbers the guard
+     * ruled on. WARN, not throw — a scrollUntilVisible whose next step does
+     * not need the target on screen passes today and must keep passing.
+     */
+    @Test
+    fun `a target the rule lost is reported after the last motion has settled`() {
+        val body = codeOnly(bodyOf("unstickFromTrailingEdge"))
+        val seq = sequenceOf(body, listOf("awaitTargetSettled(", "boundsOf(id) == null", "warningHandler"))
+        // Two settles (after the drag, after the rollback), THEN the re-read,
+        // THEN the report. A re-read before the rollback's settle would read
+        // a moving target — the very defect 1.15.0 fixed for the guard.
+        assertEquals(
+            listOf("awaitTargetSettled(", "awaitTargetSettled(", "boundsOf(id) == null", "warningHandler"),
+            seq.filter { it != "warningHandler" || seq.indexOf(it) >= 0 }.let { s ->
+                // keep only the tail from the first settle on; the outside
+                // warning precedes the motions and is another arm's subject
+                s.drop(s.indexOf("awaitTargetSettled("))
+            }
+        )
+        val lit = literalBodyOf("unstickFromTrailingEdge")
+        assertTrue("the lost line names the step and the loss on the greppable channel",
+            lit.contains("WARN [scrollUntilVisible] '\$id' was found and then lost"))
+        assertTrue("the lost line reaches System.out as well",
+            lit.substring(lit.indexOf("was found and then lost")).contains("println("))
+    }
+
+    /**
+     * The re-approach stops on CLEAR, not on first sight, and every drag is
+     * followed by a settle before the next read. Measured 2026-09-20 (v2 of
+     * the fix, 6 runs of 6 red): stopping at first sight left the heading
+     * 148px inside the edge and the rows under it outside.
+     */
+    @Test
+    fun `the re-approach drags until the target is clear of the edge it left through`() {
+        val body = codeOnly(bodyOf("reapproachAfterLoss"))
+        assertTrue("landing is the rule's, not a local number",
+            body.contains("ViewportMargin.LANDING_CLEARANCES * clearance"))
+        val seq = sequenceOf(body, listOf("device.swipe(UnstickMotion.path(", "awaitTargetSettled("))
+        assertEquals("two drag directions, each followed by a settle before the next read",
+            listOf("device.swipe(UnstickMotion.path(", "device.swipe(UnstickMotion.path(", "awaitTargetSettled("), seq)
+        assertFalse("no bare coordinate swipe", body.contains("device.swipe(cx,"))
+    }
+
+    /**
+     * Both scroll-leg exits confirm the target once the on-arrival settle has
+     * run, re-approach it when it is gone, and only then run the clearance
+     * rule. The early-return exit (target visible on entry) has nothing to
+     * confirm.
+     */
+    @Test
+    fun `both scroll legs confirm the target at rest before the clearance rule`() {
+        val body = codeOnly(bodyOf("executeScrollUntilVisible"))
+        val seq = sequenceOf(body, listOf("searchInDirection(", "awaitTargetSettled(",
+            "boundsOf(id) == null", "reapproachAfterLoss(", "unstickFromTrailingEdge("))
+        val perLeg = listOf("searchInDirection(", "awaitTargetSettled(",
+            "boundsOf(id) == null", "reapproachAfterLoss(", "unstickFromTrailingEdge(")
+        // entry exit: settle + unstick (nothing to confirm), then two legs
+        // of the same shape
+        assertEquals(listOf("awaitTargetSettled(", "unstickFromTrailingEdge(") + perLeg + perLeg, seq)
     }
 
     // ---------------------------------------------------------------- 1.15.1
@@ -429,11 +510,15 @@ class ScrollUntilVisibleWiringTest {
             listOf("isOutsideTrailingEdge(", "warningHandler",
                    "isFlushAgainstTrailingEdge(")
         )
+        // `take(3)`: 1.15.5 added a SECOND warning site after the motions
+        // (the found-then-lost line, pinned by its own arm below). This arm
+        // is about the order of the first three, not about how many
+        // warnings the function can emit.
         assertEquals(
             "the outside test must run, report, and come before the edge test",
             listOf("isOutsideTrailingEdge(", "warningHandler",
                    "isFlushAgainstTrailingEdge("),
-            seq
+            seq.take(3)
         )
         // ⚠️ And it must be the ONE-SIDED predicate. `Rect.contains` tests four
         // edges for a claim about one, and `visibleBounds` is clipped to the

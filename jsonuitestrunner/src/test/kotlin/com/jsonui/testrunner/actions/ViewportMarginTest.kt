@@ -151,4 +151,69 @@ class ViewportMarginTest {
         assertFalse("volume_field: on the edge, and the unstick moved it 248px",
             ViewportMargin.isOutsideTrailingEdge(1307, 1307))
     }
+
+    // ------------------------------------------------------------- 1.15.5
+    //
+    // The corrective motion's travel. Until 1.15.5 it was 2 * 12% of the
+    // surface HEIGHT flung in 20 steps — 492px nominal, 613–645px measured on
+    // a 1080x2400 phone — for a shortfall that is at most one clearance
+    // (129px there). These arms pin the new travel to the shortfall.
+
+    @Test
+    fun `a target flush on the edge travels three clearances`() {
+        // bottom == surfaceBottom: shortfall is the whole clearance
+        assertEquals(387, ViewportMargin.unstickTravel(2127, 2127, 129))
+    }
+
+    @Test
+    fun `a target just inside the clearance band travels little more than two clearances`() {
+        // 1px inside the band: shortfall 1
+        assertEquals(259, ViewportMargin.unstickTravel(2127 - 128, 2127, 129))
+    }
+
+    @Test
+    fun `the travel lands the bottom LANDING_CLEARANCES clearances above the edge wherever it started`() {
+        val surfaceBottom = 2127; val c = 129
+        for (bottom in (surfaceBottom - c + 1)..surfaceBottom) {
+            val landed = bottom - ViewportMargin.unstickTravel(bottom, surfaceBottom, c)
+            assertEquals("start $bottom", surfaceBottom - ViewportMargin.LANDING_CLEARANCES * c, landed)
+        }
+    }
+
+    @Test
+    fun `the travel is bounded by three clearances even for a target beyond the edge`() {
+        // The WARN case (outside the surface): the rule still runs, the
+        // motion must not grow with how far outside the target is.
+        assertEquals(387, ViewportMargin.unstickTravel(2295, 2127, 129))
+        assertEquals(387, ViewportMargin.unstickTravel(9999, 2127, 129))
+    }
+
+    @Test
+    fun `the travel never shrinks below two clearances for a target the rule fires on`() {
+        // Fires when bottom > surfaceBottom - clearance; the least it moves
+        // is two clearances, so a control AND a row below it land inside.
+        assertEquals(258, ViewportMargin.unstickTravel(2127 - 129, 2127, 129))
+    }
+
+    @Test
+    fun `the landing is three clearances, the reporting page's control plus a row`() {
+        assertEquals(3, ViewportMargin.LANDING_CLEARANCES)
+    }
+
+    @Test
+    fun `no clearance means no travel`() {
+        assertEquals(0, ViewportMargin.unstickTravel(2127, 2127, 0))
+    }
+
+    /**
+     * The number the old form moved, against the number this one asks for,
+     * on the reporting phone (surface 1080x2058, clearance 129): the ratio
+     * that the 1.15.0 notes filed as "two different bases" and left.
+     */
+    @Test
+    fun `on the reporting phone the travel is at most 387px where the old swipe asked for 492`() {
+        val old = 2 * (2058 * ViewportMargin.CLEARANCE_FRACTION).toInt()
+        assertEquals(492, old)
+        assertTrue(ViewportMargin.unstickTravel(2337, 2337, ViewportMargin.clearanceFor(2058, 1080)) <= 387)
+    }
 }
