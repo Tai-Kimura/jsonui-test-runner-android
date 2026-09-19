@@ -12,6 +12,11 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <application>
+        <!-- ScrollProbeActivity: a tall ScrollView started explicitly by the
+             gesture-motion tests; not a launcher target. -->
+        <activity
+            android:name="com.jsonui.testrunner.actions.ScrollProbeActivity"
+            android:exported="false" />
         <activity
             android:name="com.jsonui.testrunner.runner.LaunchProbeActivity"
             android:exported="true">

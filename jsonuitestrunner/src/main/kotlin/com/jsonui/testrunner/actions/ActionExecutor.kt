@@ -706,6 +706,17 @@ class ActionExecutor(
         if (searchInDirection(step.container, containerBounds, id, direction,
                 System.currentTimeMillis() + timeout)) {
             awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            // "Found" is a verdict about a tree that may still have been
+            // moving. Once at rest, a target that is gone is just past the
+            // edge it left through — reapproach it before trusting the exit.
+            if (boundsOf(id) == null && !reapproachAfterLoss(id, containerBounds, direction)) {
+                throw AssertionError(
+                    "Element '$id' was found while scrolling $direction but had left the " +
+                        "viewport by the time the scroll came to rest, and " +
+                        "$MAX_REAPPROACH_DRAGS drags back did not bring it in " +
+                        "(swipes ran within ${surface.rect.toShortString()} from ${surface.source})"
+                )
+            }
             unstickFromTrailingEdge(id, step.container, UnstickVia.SCROLLED)
             return
         }
@@ -717,6 +728,14 @@ class ActionExecutor(
         if (searchInDirection(step.container, containerBounds, id, reverse,
                 System.currentTimeMillis() + maxOf(timeout / 2, 6000L))) {
             awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            if (boundsOf(id) == null && !reapproachAfterLoss(id, containerBounds, reverse)) {
+                throw AssertionError(
+                    "Element '$id' was found while scrolling $reverse but had left the " +
+                        "viewport by the time the scroll came to rest, and " +
+                        "$MAX_REAPPROACH_DRAGS drags back did not bring it in " +
+                        "(swipes ran within ${surface.rect.toShortString()} from ${surface.source})"
+                )
+            }
             unstickFromTrailingEdge(id, step.container, UnstickVia.SCROLLED)
             return
         }
@@ -726,6 +745,9 @@ class ActionExecutor(
                 "(swipes ran within ${surface.rect.toShortString()} from ${surface.source})"
         )
     }
+
+    /** Bounded: 8 drags of two clearances is about one phone screen. */
+    private val MAX_REAPPROACH_DRAGS = 8
 
     private fun oppositeDirection(direction: String): String = when (direction) {
         "down" -> "up"
@@ -912,6 +934,17 @@ class ActionExecutor(
         return runCatching {
             var guard = 0
             while (System.currentTimeMillis() < deadline && guard < 100) {
+                // ⚠️ "FOUND" HERE IS A VERDICT ABOUT A SNAPSHOT THAT MAY LAG THE
+                // SCREEN. Measured 2026-09-20 on a phone lane: this BFS reported
+                // the target at [84,829][996,901], visibleToUser=true, +120–230ms
+                // after the action, while UiAutomator's findObject at the same
+                // instant returned null and the target was at rest ~40px BELOW
+                // the viewport — the scroll had carried it in and out again
+                // while the node cache still held a frame from mid-animation.
+                // The caller therefore confirms the target through UiAutomator
+                // once it has settled and re-approaches it when it is gone
+                // (reapproachAfterLoss); polling this tree for "rest" was tried
+                // and measured useless (it reads the same cache).
                 if (findByViewId(targetId) != null) return@runCatching true
                 val container = findByViewId(containerId) ?: return@runCatching false
                 if (!container.isScrollable) return@runCatching false
@@ -1137,6 +1170,56 @@ class ActionExecutor(
         }.getOrNull()
 
     /**
+     * A found target that is not visible once the motion has ended sits just
+     * past the edge it left through — the trailing edge of the leg's motion,
+     * so the way back is a short scroll AGAINST the leg's direction. Bounded
+     * drags ([UnstickMotion], two clearances each) with a settle after each,
+     * at most [MAX_REAPPROACH_DRAGS]. Prints one line either way: this is
+     * the recovery for the 2026-09-19 report, and a face reading its capture
+     * must be able to tell "never needed" from "needed and worked" from
+     * "needed and did not".
+     */
+    private fun reapproachAfterLoss(id: String, surface: Rect, direction: String): Boolean {
+        val clearance = ViewportMargin.clearanceFor(surface.height(), surface.width())
+        val travel = 2 * clearance
+        val landing = ViewportMargin.LANDING_CLEARANCES * clearance
+        val cx = gestureSafeX(surface.centerX())
+        val cy = surface.centerY()
+        var drags = 0
+        // Not "visible" but "clear": stopping at first sight leaves the target
+        // a few px inside the edge it left through — measured (v2 of this
+        // fix, 6 runs of 6 red): the heading came back at 148px above the
+        // edge and the rows the test wanted under it stayed outside. So the
+        // re-approach continues until the target's trailing side is
+        // [ViewportMargin.LANDING_CLEARANCES] clearances from that edge —
+        // the same landing the clearance rule gives a flush target.
+        fun clear(): Boolean {
+            val b = boundsOf(id) ?: return false
+            return when (direction) {
+                "up" -> b.bottom <= surface.bottom - landing   // left through the bottom
+                else -> b.top >= surface.top + landing         // left through the top
+            }
+        }
+        var done = clear()
+        while (!done && drags < MAX_REAPPROACH_DRAGS && travel > 0) {
+            // The leg moved the content toward `direction`; move it back.
+            when (direction) {
+                "up" -> device.swipe(UnstickMotion.path(cx, cy + travel / 2, cy - travel / 2), UnstickMotion.STEPS)
+                "down" -> device.swipe(UnstickMotion.path(cx, cy - travel / 2, cy + travel / 2), UnstickMotion.STEPS)
+                else -> return false
+            }
+            drags++
+            awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            done = clear()
+        }
+        val visible = boundsOf(id) != null
+        println("[ActionExecutor] scrollUntilVisible '$id' [re-approach]: lost after arrival, " +
+            "$drags drag(s) of ${travel}px against '$direction', visible=$visible, " +
+            "clear=$done, resting ${boundsOf(id)?.toShortString()}")
+        return visible
+    }
+
+    /**
      * Wait for a found scroll target to stop moving before the next step taps
      * it. With a container given, scrollUntilVisible scrolls through the
      * accessibility ACTION_SCROLL_FORWARD, which Compose animates and reports
@@ -1284,9 +1367,23 @@ class ActionExecutor(
         }
         val cx = surface.centerX()
         val cy = surface.centerY()
-        val step = (surface.height() * ViewportMargin.CLEARANCE_FRACTION).toInt()
-            .coerceAtLeast(1)
-        device.swipe(cx, cy + step, cx, cy - step, 20)
+        // 🚨 A DRAG SIZED TO THE SHORTFALL, NOT A FLING SIZED TO THE SCREEN.
+        // `step` is the whole travel of the finger (the field of that name on
+        // the unstick line keeps its meaning: how far the motion nominally
+        // moved the content). Until 1.15.5 it was 12% of the surface height
+        // each way in a 20-step swipe — 492px nominal on a phone, 613–645px
+        // measured, because a 100ms swipe releases at fling velocity — and
+        // the rollback was the same fling backwards. Two half-screen flings
+        // that do not cancel is how a FOUND target was handed back off-screen
+        // (reported 2026-09-19: success returned, target outside the
+        // viewport, the page at the far end of the search direction; 1 run
+        // in 4 on a phone lane after a layout change moved the section).
+        // [ViewportMargin.unstickTravel] is one to two clearances, and
+        // [UnstickMotion] holds the finger before lifting so nothing flings.
+        val step = ViewportMargin.unstickTravel(
+            before.bottom, surface.bottom,
+            ViewportMargin.clearanceFor(surface.height(), surface.width()))
+        device.swipe(UnstickMotion.path(cx, cy + step / 2, cy - step / 2), UnstickMotion.STEPS)
         // 🚨 NOT `device.waitForIdle()`. This swipe is 20 steps, which is a
         // FLING, and waitForIdle waits on accessibility events Compose does
         // not send under a bare UiAutomator (isEnabled=false, measured
@@ -1318,10 +1415,35 @@ class ActionExecutor(
         val keep = ViewportMargin.keepScrolledPosition(
             before.bottom, after?.bottom, surface.bottom)
         if (!keep) {
-            device.swipe(cx, cy - step, cx, cy + step, 20)
-            // The rollback is a fling too, and it is then the last motion of
-            // the step — (b) above applies to this branch unchanged.
+            device.swipe(UnstickMotion.path(cx, cy - step / 2, cy + step / 2), UnstickMotion.STEPS)
+            // The rollback is the same drag backwards — precise, so it puts
+            // the target back where the search FOUND it (a fling did not) —
+            // and it is then the last motion of the step, so (b) above
+            // applies to this branch unchanged.
             awaitTargetSettled(id, TargetSettle.AFTER_REVERT)
+        }
+        // 🚨 THE STEP'S PROMISE IS VISIBILITY, AND THIS IS WHERE IT IS CHECKED.
+        // Every exit of scrollUntilVisible reached this function with the
+        // target FOUND; the two motions above are the only things that can
+        // have moved it since. If it is gone now, the step is about to return
+        // success over a target the next step cannot see — the exact shape of
+        // the 2026-09-19 report, whose failure text then named the NEXT
+        // step's id and a projection of the wrong end of the page.
+        //
+        // ⚠️ WARN, NOT THROW, for the reason 1.15.1 gave: a scrollUntilVisible
+        // whose next step does not need the target on screen (parking at the
+        // end of a page before a second scroll) passes today, and a throw
+        // here would redden it for a loss the following step repairs. The
+        // line carries every number the guard ruled on, so the next report
+        // of this shape arrives with the mechanism measured rather than read.
+        if (boundsOf(id) == null) {
+            val line = "WARN [scrollUntilVisible] '$id' was found and then lost by the " +
+                "edge-clearance motion: it is no longer visible after " +
+                (if (keep) "a drag of ${step}px" else "a drag of ${step}px and its rollback") +
+                " (was flush at ${before.bottom} of ${surface.bottom}, after=${after?.bottom}). " +
+                "The step returns without it on screen; the next step will not see it."
+            warningHandler?.invoke(line)
+            println("[ActionExecutor] $line")
         }
         // 🚨 THE LINE A FACE READS TO TELL "THE RULE DID NOT FIRE" FROM "I
         // COULD NOT SEE IT". Reported 2026-09-09 by the face that accepted
