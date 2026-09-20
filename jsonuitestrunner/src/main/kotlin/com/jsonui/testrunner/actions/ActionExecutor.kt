@@ -1108,7 +1108,8 @@ class ActionExecutor(
             // name — the exact spelling and the `name (n).ext` copies — are
             // removed first. Only rows this package owns can be touched on
             // API 29+, which is also the only rows that are ours to remove.
-            val removed = deleteOwnMediaRows(resolver, collection, file)
+            val removed = deleteOwnMediaRows(resolver, collection, file) +
+                deleteOrphanedMediaRows(collection, file)
             val uri = try {
                 resolver.insert(collection, values)
                     ?: throw AssertionError("addMedia could not insert ${file.name} into MediaStore")
@@ -1129,7 +1130,7 @@ class ActionExecutor(
                 file.inputStream().use { it.copyTo(out) }
             } ?: throw AssertionError("addMedia could not open output stream for ${file.name}")
             println("[ActionExecutor] addMedia '${file.name}': removed $removed earlier row(s) of this " +
-                "package, inserted $uri")
+                "package or orphaned by its uninstall, inserted $uri")
         }
     }
 
@@ -1154,6 +1155,56 @@ class ActionExecutor(
     private fun deleteOwnMediaRows(resolver: android.content.ContentResolver, collection: android.net.Uri, file: File): Int {
         val (where, args) = mediaRowSelection(file, ownOnly = true)
         return runCatching { resolver.delete(collection, where, args) }.getOrDefault(0)
+    }
+
+    /**
+     * Rows the resolver cannot reach: the ones whose owner is gone.
+     *
+     * 🚨 UNINSTALLING THE APP ORPHANS ITS ROWS, IT DOES NOT REMOVE THEM.
+     * MediaProvider sets `owner_package_name` to NULL for the package's rows
+     * when it is uninstalled, and a reinstalled app — same package name,
+     * same fixture — may not delete them: under scoped storage the resolver
+     * silently skips rows it does not own (measured 2026-09-21 on an API 35
+     * emulator: `OR owner_package_name IS NULL` in the selection deleted
+     * nothing and threw nothing, and the next insert was respelled `(1)`).
+     * A test matrix that reinstalls the app per lane therefore grew one
+     * orphan per run through 1.15.6's own-rows sweep, and the 33rd run was
+     * back (reported 2026-09-20 from that lane).
+     *
+     * The shell can delete any row, and the instrumentation has the shell.
+     * `content delete` through UiAutomation, scoped to this fixture's two
+     * spellings AND (owner NULL OR owner = this package) — a live app's row
+     * of the same name is left alone. Measured: removes the orphan and its
+     * file. The count is the shell's own row count before minus after.
+     *
+     * ⚠️ RUN AS A SCRIPT, NOT AS A COMMAND LINE. UiAutomation hands the
+     * string to Runtime.exec, which splits on whitespace and knows no
+     * quoting — a WHERE clause cannot survive that. So the command is
+     * written to a file under this package's external files dir (which the
+     * shell user can read) and run with `sh`, and names are escaped for
+     * both the shell and SQL.
+     */
+    private fun deleteOrphanedMediaRows(collection: android.net.Uri, file: File): Int {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val pkg = context.packageName
+        val where = MediaSweep.whereClause(file.name, pkg)
+        val script = MediaSweep.script(collection.toString(), where)
+        val out = runShellScript("jsonui_media_sweep.sh", script) ?: return 0
+        return MediaSweep.sweptCount(out)
+    }
+
+    /**
+     * Writes [body] to a file the shell can read and runs it with `sh`.
+     * Returns the output, or null when there is nowhere to write it.
+     */
+    private fun runShellScript(name: String, body: String): String? {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val dir = context.getExternalFilesDir(null) ?: return null
+        val f = File(dir, name)
+        return runCatching {
+            f.writeText(body)
+            device.executeShellCommand("sh ${f.absolutePath}")
+        }.getOrNull().also { runCatching { f.delete() } }
     }
 
     private fun countMediaRows(resolver: android.content.ContentResolver, collection: android.net.Uri, file: File, ownOnly: Boolean): Int {
