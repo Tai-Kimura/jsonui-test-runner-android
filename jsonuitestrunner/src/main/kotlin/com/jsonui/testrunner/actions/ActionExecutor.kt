@@ -1091,12 +1091,76 @@ class ActionExecutor(
                 put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
             }
             val resolver = context.contentResolver
-            val uri = resolver.insert(collection, values)
-                ?: throw AssertionError("addMedia could not insert ${file.name} into MediaStore")
+            // 🚨 RE-SEED, DO NOT ACCUMULATE. Until 1.15.6 this inserted and never
+            // deleted, so every run left one more row: MediaStore uniquifies a
+            // repeated DISPLAY_NAME as `name (n).ext`, and AOSP's
+            // FileUtils.buildUniqueFileWithExtension gives up at n = 32 with
+            // "Failed to build unique file" — a shared emulator went red on
+            // the 33rd run of any test that adds the same fixture, with an
+            // exception text that names MediaStore rather than the fixture
+            // (reported 2026-09-20: 32 rows on one AVD, 9 on another, all
+            // from one flow test, oldest from 2026-09-03).
+            //
+            // The documented contract is "the fixture EXISTS afterwards; it
+            // accumulates across runs, so assert presence, not counts" —
+            // iOS's PhotoKit seeding is add-only. So the row still persists
+            // after the run (parity), but our own earlier rows for the same
+            // name — the exact spelling and the `name (n).ext` copies — are
+            // removed first. Only rows this package owns can be touched on
+            // API 29+, which is also the only rows that are ours to remove.
+            val removed = deleteOwnMediaRows(resolver, collection, file)
+            val uri = try {
+                resolver.insert(collection, values)
+                    ?: throw AssertionError("addMedia could not insert ${file.name} into MediaStore")
+            } catch (e: IllegalStateException) {
+                // The unique-name exhaustion, named for what it is.
+                val leftovers = countMediaRows(resolver, collection, file, ownOnly = false)
+                throw AssertionError(
+                    "addMedia could not insert ${file.name}: ${e.message}. " +
+                        "$leftovers row(s) named like it exist in MediaStore (this run removed " +
+                        "$removed owned by this package); MediaStore stops uniquifying a repeated " +
+                        "name at 32. Rows owned by another package (an earlier build of the app, " +
+                        "another test package) must be removed by hand: " +
+                        "adb shell content delete --uri content://media/external/images/media " +
+                        "--where \"_display_name LIKE '${file.nameWithoutExtension}%'\"", e
+                )
+            }
             resolver.openOutputStream(uri)?.use { out ->
                 file.inputStream().use { it.copyTo(out) }
             } ?: throw AssertionError("addMedia could not open output stream for ${file.name}")
+            println("[ActionExecutor] addMedia '${file.name}': removed $removed earlier row(s) of this " +
+                "package, inserted $uri")
         }
+    }
+
+    /**
+     * Selection matching a fixture's DISPLAY_NAME as inserted and as
+     * MediaStore respells a duplicate (`name (n).ext`). Restricted to rows
+     * this package owns on API 29+, where OWNER_PACKAGE_NAME exists and is
+     * also the boundary of what an app may delete without permission.
+     */
+    private fun mediaRowSelection(file: File, ownOnly: Boolean): Pair<String, Array<String>> {
+        val stem = file.nameWithoutExtension
+        val ext = file.extension
+        val name = "(${MediaStore.MediaColumns.DISPLAY_NAME} = ? OR ${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?)"
+        val args = mutableListOf(file.name, "$stem (%).$ext")
+        if (ownOnly && android.os.Build.VERSION.SDK_INT >= 29) {
+            args.add(InstrumentationRegistry.getInstrumentation().targetContext.packageName)
+            return "$name AND ${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} = ?" to args.toTypedArray()
+        }
+        return name to args.toTypedArray()
+    }
+
+    private fun deleteOwnMediaRows(resolver: android.content.ContentResolver, collection: android.net.Uri, file: File): Int {
+        val (where, args) = mediaRowSelection(file, ownOnly = true)
+        return runCatching { resolver.delete(collection, where, args) }.getOrDefault(0)
+    }
+
+    private fun countMediaRows(resolver: android.content.ContentResolver, collection: android.net.Uri, file: File, ownOnly: Boolean): Int {
+        val (where, args) = mediaRowSelection(file, ownOnly)
+        return runCatching {
+            resolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), where, args, null)?.use { it.count } ?: -1
+        }.getOrDefault(-1)
     }
 
     /**
