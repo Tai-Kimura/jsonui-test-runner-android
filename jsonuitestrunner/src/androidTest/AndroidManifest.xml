@@ -17,6 +17,11 @@
         <activity
             android:name="com.jsonui.testrunner.actions.ScrollProbeActivity"
             android:exported="false" />
+        <!-- SwipeEdgeProbeActivity: a full-screen surface the swipe-edge test
+             swipes across; not a launcher target. -->
+        <activity
+            android:name="com.jsonui.testrunner.actions.SwipeEdgeProbeActivity"
+            android:exported="false" />
         <activity
             android:name="com.jsonui.testrunner.runner.LaunchProbeActivity"
             android:exported="true">
