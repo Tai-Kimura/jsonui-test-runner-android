@@ -340,24 +340,18 @@ class ActionExecutor(
         val element = waitForElement(id, timeout)
         val bounds = element.visibleBounds
 
-        val centerX = bounds.centerX()
-        val centerY = bounds.centerY()
-        // The gesture must START strictly inside the element: Compose routes
-        // the whole pointer stream by the hit test of the DOWN event, and
-        // center ± width/2 is the element's exclusive edge pixel — a down
-        // there misses the node, so a drag detector on it (onPan) never sees
-        // the gesture. Measured on the conformance host: edge-start never
-        // fires, 8px-inset start always does. Inset both endpoints.
-        val inset = 8
-        val swipeDistance = (minOf(bounds.width(), bounds.height()) / 2 - inset).coerceAtLeast(1)
-
-        when (direction) {
-            "up" -> device.swipe(centerX, centerY + swipeDistance, centerX, centerY - swipeDistance, 10)
-            "down" -> device.swipe(centerX, centerY - swipeDistance, centerX, centerY + swipeDistance, 10)
-            "left" -> device.swipe(centerX + swipeDistance, centerY, centerX - swipeDistance, centerY, 10)
-            "right" -> device.swipe(centerX - swipeDistance, centerY, centerX + swipeDistance, centerY, 10)
-            else -> throw IllegalArgumentException("Invalid direction: $direction")
+        // Pure geometry in swipeActionLine (JVM-tested): 8px inside the
+        // element (Compose hit-tests the DOWN point) and, like scrollSwipe,
+        // never starting in the system back-gesture edge zones.
+        val line = try {
+            swipeActionLine(
+                bounds.left, bounds.top, bounds.right, bounds.bottom,
+                direction, device.displayWidth, gestureEdgeInsetPx()
+            )
+        } catch (e: SwipeOutsideGestureSafeBandException) {
+            throw IllegalStateException("swipe '$direction' on '$id': ${e.message}", e)
         }
+        device.swipe(line.startX, line.startY, line.endX, line.endY, 10)
     }
 
     private fun executeWaitFor(step: TestStep, timeout: Long) {
