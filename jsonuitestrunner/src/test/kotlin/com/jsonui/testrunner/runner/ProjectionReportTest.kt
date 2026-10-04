@@ -78,7 +78,7 @@ class ProjectionReportTest {
         // projection — and the report must not blame it.
         val present = setOf("pane_content", missing)
         assertEquals(
-            ProjectionVerdict.PRESENT_ALL_ALONG,
+            ProjectionVerdict.PRESENT_AT_FAILURE,
             ProjectionReport.verdict(missing, present, present, present)
         )
     }
@@ -93,7 +93,7 @@ class ProjectionReportTest {
         assertTrue(ProjectionReport.holds(projection, "tmp_probe_present"))
         assertTrue(ProjectionReport.holds(projection, "bare_tag"))
         assertEquals(
-            ProjectionVerdict.PRESENT_ALL_ALONG,
+            ProjectionVerdict.PRESENT_AT_FAILURE,
             ProjectionReport.verdict("tmp_probe_present", projection, projection, projection)
         )
         // A partial segment must NOT match: "probe_present" is only a tail
@@ -125,5 +125,20 @@ class ProjectionReportTest {
         assertEquals(ProjectionVerdict.STILL_MISSING, ProjectionReport.verdict(missing, many, many, many))
         assertTrue(text, text.contains("(500, first 5)"))
         assertFalse(text, text.contains("id_400"))
+    }
+
+    /**
+     * Present at the first look after the failure — not "all along": every
+     * look is taken after the wait gave up. The printed line keeps the old
+     * word for anyone searching reports for it.
+     */
+    @Test
+    fun presentAtFailureSaysOnlyWhenItLooked() {
+        val ids = setOf(missing)
+        val text = ProjectionReport.render(missing, ids, ids, ids)
+        assertEquals(ProjectionVerdict.PRESENT_AT_FAILURE, ProjectionReport.verdict(missing, ids, ids, ids))
+        assertTrue(text, text.startsWith("projection probe for '$missing': PRESENT_AT_FAILURE (formerly PRESENT_ALL_ALONG)"))
+        val gone = ProjectionReport.render(missing, emptySet(), emptySet(), emptySet())
+        assertFalse(gone, gone.contains("formerly"))
     }
 }

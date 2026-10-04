@@ -122,7 +122,8 @@ class AssertionPollStaleTest {
         // a value comparison that never ran.
         assertTrue(
             "the timeout branch must rethrow the caught throwable itself",
-            Regex(">=\\s*timeout\\)\\s*throw\\s+last").containsMatchIn(code)
+            // 1.15.9: the deadline is a monotonic Deadline (DeadlineCensusTest).
+            Regex("deadline\\.expired\\(\\)\\)\\s*throw\\s+last").containsMatchIn(code)
         )
     }
 

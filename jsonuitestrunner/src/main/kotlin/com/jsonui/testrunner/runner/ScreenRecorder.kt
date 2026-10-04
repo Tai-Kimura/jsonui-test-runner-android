@@ -54,7 +54,7 @@ internal class ScreenRecorder(private val automation: UiAutomation) {
         drain(automation.executeShellCommand("rm -f ${outputFile.absolutePath}"))
         output = outputFile
         startLatencyMs = -1
-        val startedAt = System.currentTimeMillis()
+        val ready = Deadline.of(readyTimeoutMs)
         thread = Thread {
             // Draining until EOF == screenrecord exited (finalized or died).
             drain(
@@ -67,13 +67,8 @@ internal class ScreenRecorder(private val automation: UiAutomation) {
         // display are set up; until the file exists nothing is being captured
         // (the case's first several hundred ms were missing from recordings
         // when start returned immediately).
-        while (System.currentTimeMillis() - startedAt < readyTimeoutMs) {
-            if (exists(outputFile)) {
-                startLatencyMs = System.currentTimeMillis() - startedAt
-                break
-            }
-            Thread.sleep(50)
-        }
+        ready.poll(intervalMs = 50) { if (exists(outputFile)) true else null }
+            ?.let { startLatencyMs = ready.elapsedMs }
     }
 
     /** What [stop] returns: the file, and whether screenrecord finalised it in time. */

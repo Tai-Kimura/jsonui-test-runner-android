@@ -8,6 +8,8 @@ import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.jsonui.testrunner.models.TestStep
+import com.jsonui.testrunner.runner.Deadline
+import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.ProjectionProbe
 import com.jsonui.testrunner.runner.ViewModelStateProvider
 import kotlinx.serialization.json.JsonElement
@@ -93,13 +95,10 @@ class AssertionExecutor(
         val screenId = step.name ?: throw IllegalArgumentException("screen requires 'name'")
         val marker = ScreenMarker.tagFor(screenId)
 
-        val deadline = System.currentTimeMillis() + timeout
-        while (System.currentTimeMillis() < deadline) {
-            if (device.findObject(By.res(marker)) != null) return
-            Thread.sleep(100)
-        }
+        val deadline = Deadline.of(timeout)
+        deadline.poll { device.findObject(By.res(marker)) }?.let { return }
         val appPackage = InstrumentationRegistry.getInstrumentation().targetContext.packageName
-        throw AssertionError(ScreenMarker.diagnosis(device, screenId, appPackage))
+        throw AssertionError(ScreenMarker.diagnosis(device, screenId, appPackage) + "\n  " + deadline.describe())
     }
 
     /**
@@ -109,8 +108,10 @@ class AssertionExecutor(
      * run pays nothing — and the next intermittent occurrence answers, by
      * itself, the question a consumer could not reproduce on demand.
      */
-    private fun elementNotFound(id: String, within: String): String =
-        "Element '$id' not found by resource-id within $within\n" + ProjectionProbe.report(id)
+    private fun elementNotFound(id: String, within: String, deadline: Deadline? = null): String =
+        "Element '$id' not found by resource-id within $within\n" +
+            (deadline?.let { FindTimeoutReport.render(device, id, it) + "\n" } ?: "") +
+            ProjectionProbe.report(id)
 
     private fun assertVisible(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("visible requires 'id'")
@@ -403,17 +404,19 @@ class AssertionExecutor(
      * reader at a value comparison that never happened.
      */
     private fun pollUntil(timeout: Long, searchedId: String?, check: () -> Unit) {
-        val startTime = System.currentTimeMillis()
+        val deadline = Deadline.of(timeout)
         var debugLogged = false
 
         // One body, two catch clauses: the retry policy lives in a single place
         // so a future transient type cannot be handled one way here and another
         // way three lines down.
         fun retryOrRethrow(last: Throwable) {
-            if (System.currentTimeMillis() - startTime >= timeout) throw last
+            // The attempt that threw was the last look: the deadline is judged
+            // after a look, never after a sleep (Deadline.poll's order).
+            if (deadline.expired()) throw last
 
             // Debug: dump hierarchy once after 2 seconds of element polling
-            if (searchedId != null && !debugLogged && System.currentTimeMillis() - startTime > 2000) {
+            if (searchedId != null && !debugLogged && deadline.elapsedMs > 2000) {
                 debugLogged = true
                 dumpHierarchy(searchedId)
             }
@@ -459,16 +462,9 @@ class AssertionExecutor(
      * Wait for element to appear by id
      */
     private fun waitForElement(id: String, timeout: Long): UiObject2 {
-        val startTime = System.currentTimeMillis()
-
-        while (System.currentTimeMillis() - startTime < timeout) {
-            // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
-            val element = device.findObject(By.res(id))
-            if (element != null) return element
-
-            Thread.sleep(100)
-        }
-
-        throw AssertionError(elementNotFound(id, "${timeout}ms"))
+        val deadline = Deadline.of(timeout)
+        // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
+        return deadline.poll { device.findObject(By.res(id)) }
+            ?: throw AssertionError(elementNotFound(id, "${timeout}ms", deadline))
     }
 }

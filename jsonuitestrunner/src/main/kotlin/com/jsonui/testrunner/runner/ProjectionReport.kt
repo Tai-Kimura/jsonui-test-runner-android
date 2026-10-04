@@ -2,8 +2,17 @@ package com.jsonui.testrunner.runner
 
 /** What the failure-path probe concluded about a missing element. */
 enum class ProjectionVerdict {
-    /** The id was in the projection all along — the miss was not the projection. */
-    PRESENT_ALL_ALONG,
+    /**
+     * The id was in the projection at the FIRST look after the failure. That
+     * is all it says: every look here is taken after the wait gave up, so it
+     * cannot tell "present throughout the wait" from "appeared at its end".
+     * Until 1.15.9 this was PRESENT_ALL_ALONG, which claimed the first; a
+     * consumer's run (ticket android-driver-misses-a-present-resource-id-for-
+     * 25s) showed the second, behind a wall-clock deadline that expired at
+     * once. The printed verdict keeps the old word for anyone searching
+     * reports for it.
+     */
+    PRESENT_AT_FAILURE,
 
     /** UiAutomator's node cache was stale: dropping it made the id appear. */
     RECOVERED_BY_CLEAR_CACHE,
@@ -56,7 +65,7 @@ object ProjectionReport {
         afterClearCache: Set<String>,
         afterServiceResync: Set<String>
     ): ProjectionVerdict = when {
-        holds(before, id) -> ProjectionVerdict.PRESENT_ALL_ALONG
+        holds(before, id) -> ProjectionVerdict.PRESENT_AT_FAILURE
         holds(afterClearCache, id) -> ProjectionVerdict.RECOVERED_BY_CLEAR_CACHE
         holds(afterServiceResync, id) -> ProjectionVerdict.RECOVERED_BY_SERVICE_RESYNC
         else -> ProjectionVerdict.STILL_MISSING
@@ -79,7 +88,8 @@ object ProjectionReport {
     ): String {
         val verdict = verdict(id, before, afterClearCache, afterServiceResync)
         val lines = mutableListOf(
-            "projection probe for '$id': $verdict",
+            "projection probe for '$id': $verdict" +
+                if (verdict == ProjectionVerdict.PRESENT_AT_FAILURE) " (formerly PRESENT_ALL_ALONG)" else "",
             "  own-package ids: before=${before.size} afterClearCache=${afterClearCache.size} " +
                 "afterServiceResync=${afterServiceResync.size}"
         )

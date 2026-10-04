@@ -17,6 +17,8 @@ import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.runner.AppWindow
+import com.jsonui.testrunner.runner.Deadline
+import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.ProjectionProbe
 import java.io.File
 
@@ -365,18 +367,12 @@ class ActionExecutor(
             throw IllegalArgumentException("waitForAny requires non-empty 'ids'")
         }
 
-        val startTime = System.currentTimeMillis()
-        while (System.currentTimeMillis() - startTime < timeout) {
-            for (id in ids) {
-                // Find by resource-id (Compose testTag)
-                val element = device.findObject(By.res(id))
-                if (element != null) {
-                    return
-                }
-            }
-            Thread.sleep(100)
-        }
-        throw AssertionError("None of elements [${ids.joinToString(", ")}] appeared within ${timeout}ms")
+        val deadline = Deadline.of(timeout)
+        // Find by resource-id (Compose testTag)
+        deadline.poll { ids.firstOrNull { device.findObject(By.res(it)) != null } }?.let { return }
+        throw AssertionError(
+            "None of elements [${ids.joinToString(", ")}] appeared within ${timeout}ms\n  ${deadline.describe()}"
+        )
     }
 
     private fun executeWait(step: TestStep) {
@@ -405,9 +401,9 @@ class ActionExecutor(
     private fun executeAlertTap(step: TestStep, timeout: Long) {
         val buttonText = step.button ?: throw IllegalArgumentException("alertTap requires 'button'")
 
-        val startTime = System.currentTimeMillis()
+        val deadline = Deadline.of(timeout)
 
-        while (System.currentTimeMillis() - startTime < timeout) {
+        while (true) {
             // Prefer a CLICKABLE node with the label. A bare By.text match
             // walks the hierarchy depth-first and hits a dialog *title* that
             // shares the button's text (title "Sign Out" + button "Sign Out")
@@ -456,6 +452,7 @@ class ActionExecutor(
                 return
             }
 
+            if (deadline.expired()) break
             Thread.sleep(100)
         }
 
@@ -504,7 +501,7 @@ class ActionExecutor(
         // either sheet: the option list (SelectBox) or the wheel picker's Done
         // button (DateSelectBox). The fixed sleep made the failure text's
         // "within ${timeout}ms" a lie about how long it had actually looked.
-        val deadline = System.currentTimeMillis() + timeout
+        val deadline = Deadline.of(timeout)
         var optionList: UiObject2? = null
         var doneButton: UiObject2? = null
         while (true) {
@@ -512,7 +509,7 @@ class ActionExecutor(
             if (optionList != null) break
             doneButton = device.findObject(By.res("kjui_x7q_done"))
             if (doneButton != null) break
-            if (System.currentTimeMillis() >= deadline) break
+            if (deadline.expired()) break
             Thread.sleep(100)
         }
 
@@ -552,22 +549,10 @@ class ActionExecutor(
                     is SelectOptionSelector.ByLabel -> selector.label
                     else -> error("unreachable")
                 }
-                val startTime = System.currentTimeMillis()
-                var found = false
-
-                while (System.currentTimeMillis() - startTime < timeout && !found) {
-                    val option = device.findObject(By.text(text))
-                    if (option != null) {
-                        option.click()
-                        found = true
-                    } else {
-                        Thread.sleep(100)
-                    }
-                }
-
-                if (!found) {
-                    throw AssertionError("Option '$text' not found within ${timeout}ms")
-                }
+                val deadline = Deadline.of(timeout)
+                val option = deadline.poll { device.findObject(By.text(text)) }
+                    ?: throw AssertionError("Option '$text' not found within ${timeout}ms\n  ${deadline.describe()}")
+                option.click()
             }
             null -> throw IllegalArgumentException("selectOption requires 'index', 'value', or 'label'")
         }
@@ -698,7 +683,7 @@ class ActionExecutor(
         // a down-only search then ran to the bottom while the target sat just
         // ABOVE the viewport (intermittent by a few px of scroll position).
         if (searchInDirection(step.container, containerBounds, id, direction,
-                System.currentTimeMillis() + timeout)) {
+                Deadline.of(timeout))) {
             awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
             // "Found" is a verdict about a tree that may still have been
             // moving. Once at rest, a target that is gone is just past the
@@ -720,7 +705,7 @@ class ActionExecutor(
         // one extra half-timeout).
         val reverse = oppositeDirection(direction)
         if (searchInDirection(step.container, containerBounds, id, reverse,
-                System.currentTimeMillis() + maxOf(timeout / 2, 6000L))) {
+                Deadline.of(maxOf(timeout / 2, 6000L)))) {
             awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
             if (boundsOf(id) == null && !reapproachAfterLoss(id, containerBounds, reverse)) {
                 throw AssertionError(
@@ -763,7 +748,7 @@ class ActionExecutor(
         containerBounds: Rect,
         id: String,
         direction: String,
-        deadline: Long
+        deadline: Deadline
     ): Boolean {
         // Preferred path (container given): scroll via the accessibility
         // ACTION_SCROLL_FORWARD/BACKWARD on the container node instead of
@@ -779,7 +764,7 @@ class ActionExecutor(
         var previousSnapshot: String? = null
         var unchangedCount = 0
 
-        while (System.currentTimeMillis() < deadline) {
+        while (!deadline.expired()) {
             scrollWithinBounds(containerBounds, direction)
 
             // Let the fling settle before looking: an immediate findObject reads
@@ -917,7 +902,7 @@ class ActionExecutor(
         containerId: String?,
         targetId: String,
         direction: String,
-        deadline: Long
+        deadline: Deadline
     ): Boolean {
         if (containerId == null) return false
         val action = when (direction) {
@@ -927,7 +912,7 @@ class ActionExecutor(
         }
         return runCatching {
             var guard = 0
-            while (System.currentTimeMillis() < deadline && guard < 100) {
+            while (!deadline.expired() && guard < 100) {
                 // ⚠️ "FOUND" HERE IS A VERDICT ABOUT A SNAPSHOT THAT MAY LAG THE
                 // SCREEN. Measured 2026-09-20 on a phone lane: this BFS reported
                 // the target at [84,829][996,901], visibleToUser=true, +120–230ms
@@ -1730,16 +1715,16 @@ class ActionExecutor(
     }
 
     private fun awaitTargetSettled(id: String, phase: String) {
-        val startedAt = System.currentTimeMillis()
+        val budget = Deadline.of(TargetSettle.BUDGET_MS)
         val samples = mutableListOf<Box>()
-        while (System.currentTimeMillis() - startedAt < TargetSettle.BUDGET_MS) {
+        while (!budget.expired()) {
             // Gone mid-animation (recomposed away): nothing to settle on.
             val b = boundsOf(id) ?: break
             samples.add(Box(b.left, b.top, b.right, b.bottom))
             if (TargetSettle.settled(samples)) break
             Thread.sleep(TargetSettle.SAMPLE_INTERVAL_MS)
         }
-        println("[ActionExecutor] " + TargetSettle.settleLine(id, phase, samples, System.currentTimeMillis() - startedAt))
+        println("[ActionExecutor] " + TargetSettle.settleLine(id, phase, samples, budget.elapsedMs))
     }
 
     /**
@@ -1771,19 +1756,13 @@ class ActionExecutor(
      * Wait for element to appear by id (using resource-id)
      */
     private fun waitForElement(id: String, timeout: Long): UiObject2 {
-        val startTime = System.currentTimeMillis()
-
-        while (System.currentTimeMillis() - startTime < timeout) {
-            // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
-            val element = device.findObject(By.res(id))
-            if (element != null) return element
-
-            Thread.sleep(100)
-        }
-
-        throw AssertionError(
-            "Element '$id' not found by resource-id within ${timeout}ms\n" + ProjectionProbe.report(id)
-        )
+        val deadline = Deadline.of(timeout)
+        // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
+        return deadline.poll { device.findObject(By.res(id)) }
+            ?: throw AssertionError(
+                "Element '$id' not found by resource-id within ${timeout}ms\n" +
+                    FindTimeoutReport.render(device, id, deadline) + "\n" + ProjectionProbe.report(id)
+            )
     }
 
     private fun getSwipeCoordinates(direction: String): SwipeCoordinates {
