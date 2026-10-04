@@ -58,13 +58,21 @@ class Deadline internal constructor(
     /**
      * Look until [probe] answers, then return the answer; null when the budget
      * ran out. The last action before giving up is always a look: look, judge
-     * the deadline, sleep — never sleep, judge, give up.
+     * the deadline, sleep, [beforeRetry], look — never sleep, judge, give up.
      */
-    fun <T : Any> poll(intervalMs: Long = 100, sleep: (Long) -> Unit = { Thread.sleep(it) }, probe: () -> T?): T? {
+    fun <T : Any> poll(
+        intervalMs: Long = 100,
+        sleep: (Long) -> Unit = { Thread.sleep(it) },
+        beforeRetry: () -> Unit = {},
+        probe: () -> T?
+    ): T? {
         while (true) {
             probe()?.let { return it }
             if (expired()) return null
             sleep(intervalMs)
+            // A look after a miss must not read what the miss read: a find
+            // passes NodeCache.clearBeforeRetry here.
+            beforeRetry()
         }
     }
 

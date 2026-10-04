@@ -19,6 +19,7 @@ import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.runner.AppWindow
 import com.jsonui.testrunner.runner.Deadline
 import com.jsonui.testrunner.runner.FindTimeoutReport
+import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
 import java.io.File
 
@@ -95,6 +96,8 @@ class ActionExecutor(
                 return
             } catch (e: StaleObjectException) {
                 stale = e
+                // The re-find must not read the node that just went stale.
+                NodeCache.clear()
                 warningHandler?.invoke(
                     "stale element on '${step.action}' id=${step.id ?: "-"}; " +
                         "re-finding (attempt ${attempt + 2}/$STALE_RETRY_ATTEMPTS)"
@@ -369,7 +372,7 @@ class ActionExecutor(
 
         val deadline = Deadline.of(timeout)
         // Find by resource-id (Compose testTag)
-        deadline.poll { ids.firstOrNull { device.findObject(By.res(it)) != null } }?.let { return }
+        deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { ids.firstOrNull { device.findObject(By.res(it)) != null } }?.let { return }
         throw AssertionError(
             "None of elements [${ids.joinToString(", ")}] appeared within ${timeout}ms\n  ${deadline.describe()}"
         )
@@ -454,6 +457,7 @@ class ActionExecutor(
 
             if (deadline.expired()) break
             Thread.sleep(100)
+            NodeCache.clear()
         }
 
         // Legacy fallback: some custom dialogs expose a tappable label without
@@ -511,6 +515,7 @@ class ActionExecutor(
             if (doneButton != null) break
             if (deadline.expired()) break
             Thread.sleep(100)
+            NodeCache.clear()
         }
 
         if (optionList != null) {
@@ -550,7 +555,7 @@ class ActionExecutor(
                     else -> error("unreachable")
                 }
                 val deadline = Deadline.of(timeout)
-                val option = deadline.poll { device.findObject(By.text(text)) }
+                val option = deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.text(text)) }
                     ?: throw AssertionError("Option '$text' not found within ${timeout}ms\n  ${deadline.describe()}")
                 option.click()
             }
@@ -771,6 +776,7 @@ class ActionExecutor(
             // the mid-scroll (or not-yet-updated) a11y tree. The bounded wait
             // both settles and polls for the target.
             device.waitForIdle(1000)
+            NodeCache.clear()
             if (device.wait(Until.hasObject(By.res(id)), 800)) return true
 
             // End-reached detection: two consecutive scrolls with no change.
@@ -792,6 +798,7 @@ class ActionExecutor(
                     // semantics pass before this leg's verdict.
                     nudgeBackward(containerBounds, direction)
                     device.waitForIdle(1000)
+                    NodeCache.clear()
                     if (device.wait(Until.hasObject(By.res(id)), 1500)) return true
                     return recoverFrozenSemantics(id, containerBounds, direction)
                 }
@@ -881,9 +888,7 @@ class ActionExecutor(
             device.waitForIdle(1000)
             // Drop the UiAutomation-side node cache (API 34+; older APIs skip)
             // and resync the a11y service state, then look again.
-            runCatching {
-                android.app.UiAutomation::class.java.getMethod("clearCache").invoke(automation)
-            }
+            NodeCache.clear(automation)
             runCatching { automation.serviceInfo = automation.serviceInfo }
             if (device.wait(Until.hasObject(By.res(id)), 2000)) return true
         }
@@ -929,6 +934,10 @@ class ActionExecutor(
                 if (!container.isScrollable) return@runCatching false
                 val moved = container.performAction(action)
                 device.waitForIdle(1000)
+                // The next BFS reads this process's node cache, which Compose
+                // does not invalidate (NodeCache): drop it so the BFS sees the
+                // scroll the action just made.
+                NodeCache.clear()
                 if (!moved) {
                     // End of content (or action refused): one final fresh look.
                     return@runCatching findByViewId(targetId) != null
@@ -1304,6 +1313,7 @@ class ActionExecutor(
             }
             drags++
             awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            NodeCache.clear()
             done = clear()
         }
         val visible = boundsOf(id) != null
@@ -1718,6 +1728,9 @@ class ActionExecutor(
         val budget = Deadline.of(TargetSettle.BUDGET_MS)
         val samples = mutableListOf<Box>()
         while (!budget.expired()) {
+            // Each sample reads fresh bounds: from the cache, every sample
+            // would repeat the first and "settle" at once (NodeCache).
+            NodeCache.clear()
             // Gone mid-animation (recomposed away): nothing to settle on.
             val b = boundsOf(id) ?: break
             samples.add(Box(b.left, b.top, b.right, b.bottom))
@@ -1758,7 +1771,7 @@ class ActionExecutor(
     private fun waitForElement(id: String, timeout: Long): UiObject2 {
         val deadline = Deadline.of(timeout)
         // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
-        return deadline.poll { device.findObject(By.res(id)) }
+        return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.res(id)) }
             ?: throw AssertionError(
                 "Element '$id' not found by resource-id within ${timeout}ms\n" +
                     FindTimeoutReport.render(device, id, deadline) + "\n" + ProjectionProbe.report(id)

@@ -10,6 +10,7 @@ import androidx.test.uiautomator.UiObject2
 import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.runner.Deadline
 import com.jsonui.testrunner.runner.FindTimeoutReport
+import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
 import com.jsonui.testrunner.runner.ViewModelStateProvider
 import kotlinx.serialization.json.JsonElement
@@ -96,7 +97,7 @@ class AssertionExecutor(
         val marker = ScreenMarker.tagFor(screenId)
 
         val deadline = Deadline.of(timeout)
-        deadline.poll { device.findObject(By.res(marker)) }?.let { return }
+        deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.res(marker)) }?.let { return }
         val appPackage = InstrumentationRegistry.getInstrumentation().targetContext.packageName
         throw AssertionError(ScreenMarker.diagnosis(device, screenId, appPackage) + "\n  " + deadline.describe())
     }
@@ -422,6 +423,9 @@ class AssertionExecutor(
             }
 
             Thread.sleep(100)
+            // The next attempt re-finds; it must not read the node this one
+            // read (NodeCache: Compose sends no event that would refresh it).
+            NodeCache.clear()
         }
 
         while (true) {
@@ -464,7 +468,7 @@ class AssertionExecutor(
     private fun waitForElement(id: String, timeout: Long): UiObject2 {
         val deadline = Deadline.of(timeout)
         // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
-        return deadline.poll { device.findObject(By.res(id)) }
+        return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.res(id)) }
             ?: throw AssertionError(elementNotFound(id, "${timeout}ms", deadline))
     }
 }

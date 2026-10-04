@@ -81,7 +81,7 @@ object ProjectionProbe {
         val before = ownPackageIds(automation, pkg)
         // API 34+; older levels simply skip this arm and the verdict then
         // distinguishes the resync only.
-        runCatching { UiAutomation::class.java.getMethod("clearCache").invoke(automation) }
+        NodeCache.clear(automation)
         val afterClearCache = ownPackageIds(automation, pkg)
         runCatching { automation.serviceInfo = automation.serviceInfo }
         val afterServiceResync = ownPackageIds(automation, pkg)
