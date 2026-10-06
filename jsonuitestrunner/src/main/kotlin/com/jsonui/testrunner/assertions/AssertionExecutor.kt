@@ -12,6 +12,7 @@ import com.jsonui.testrunner.runner.Deadline
 import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
+import com.jsonui.testrunner.runner.ZeroSizeNodes
 import com.jsonui.testrunner.runner.ViewModelStateProvider
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -97,7 +98,15 @@ class AssertionExecutor(
         val marker = ScreenMarker.tagFor(screenId)
 
         val deadline = Deadline.of(timeout)
-        deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.res(marker)) }?.let { return }
+        // A marker whose drawn box is 0 x 0 is not in the accessibility tree
+        // (ZeroSizeNodes). It counts as displayed only while no OTHER screen's
+        // marker is findable — iOS's condition (no other marker hittable) —
+        // because the semantics tree also holds a screen a sheet now covers.
+        deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
+            device.findObject(By.res(marker))
+                ?: ZeroSizeNodes.find(marker).firstOrNull()
+                    ?.takeIf { ScreenMarker.presentMarkers(device).none { other -> other != screenId } }
+        }?.let { return }
         val appPackage = InstrumentationRegistry.getInstrumentation().targetContext.packageName
         throw AssertionError(ScreenMarker.diagnosis(device, screenId, appPackage) + "\n  " + deadline.describe())
     }
@@ -117,8 +126,12 @@ class AssertionExecutor(
     private fun assertVisible(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("visible requires 'id'")
         pollUntil(timeout, id) {
-            findElement(id)
-                ?: throw AssertionError(elementNotFound(id, "${timeout}ms"))
+            findElement(id) ?: throw AssertionError(
+                ZeroSizeNodes.find(id).firstOrNull()?.let { hit ->
+                    "Element '$id' exists, but its drawn box is ${hit.width}x${hit.height}, so it is not visible " +
+                        "(iOS: exists, not hittable, empty frame). Waited ${timeout}ms."
+                } ?: elementNotFound(id, "${timeout}ms")
+            )
         }
     }
 
@@ -135,9 +148,10 @@ class AssertionExecutor(
     private fun assertEnabled(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("enabled requires 'id'")
         pollUntil(timeout, id) {
-            val element = findElement(id)
+            val enabled = findElement(id)?.isEnabled
+                ?: ZeroSizeNodes.find(id).firstOrNull()?.enabled
                 ?: throw AssertionError(elementNotFound(id, "${timeout}ms"))
-            if (!element.isEnabled) {
+            if (!enabled) {
                 throw AssertionError("Element '$id' should be enabled but it is disabled")
             }
         }
@@ -146,9 +160,10 @@ class AssertionExecutor(
     private fun assertDisabled(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("disabled requires 'id'")
         pollUntil(timeout, id) {
-            val element = findElement(id)
+            val enabled = findElement(id)?.isEnabled
+                ?: ZeroSizeNodes.find(id).firstOrNull()?.enabled
                 ?: throw AssertionError(elementNotFound(id, "${timeout}ms"))
-            if (element.isEnabled) {
+            if (enabled) {
                 throw AssertionError("Element '$id' should be disabled but it is enabled")
             }
         }
@@ -165,8 +180,13 @@ class AssertionExecutor(
     }
 
     private fun assertTextOnce(step: TestStep, id: String) {
-        val element = findElement(id)
-            ?: throw AssertionError(elementNotFound(id, "a step of polling"))
+        val element = findElement(id) ?: run {
+            // An element whose drawn box is 0 x 0 reads its semantics text, as
+            // iOS reads value / label (ZeroSizeNodes).
+            val hit = ZeroSizeNodes.find(id).firstOrNull()
+                ?: throw AssertionError(elementNotFound(id, "a step of polling"))
+            return compareText(step, id, hit.text)
+        }
 
         // For Compose TextField, the editable value is on an EditText-classed
         // a11y node — either the tagged element itself or a descendant.
@@ -195,7 +215,10 @@ class AssertionExecutor(
             }
             t
         }
+        compareText(step, id, actualText)
+    }
 
+    private fun compareText(step: TestStep, id: String, actualText: String) {
         when {
             step.equals != null -> {
                 val expectedText = when (val value = step.equals) {
@@ -227,7 +250,9 @@ class AssertionExecutor(
         // Poll until the count matches. `equals: 0` passes on absence, so we
         // must NOT pre-wait for at least one element here.
         pollUntil(timeout, id) {
-            val actualCount = device.findObjects(By.res(id)).size
+            // iOS counts an element whatever its size; Android's tree has no
+            // node for one whose drawn box is 0 x 0 (ZeroSizeNodes).
+            val actualCount = device.findObjects(By.res(id)).size + ZeroSizeNodes.find(id).size
             if (actualCount != expected) {
                 throw AssertionError("Expected $expected elements with id '$id', but found $actualCount")
             }
@@ -469,6 +494,11 @@ class AssertionExecutor(
         val deadline = Deadline.of(timeout)
         // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
         return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.res(id)) }
-            ?: throw AssertionError(elementNotFound(id, "${timeout}ms", deadline))
+            ?: throw AssertionError(
+                ZeroSizeNodes.find(id).firstOrNull()?.let { hit ->
+                    "Element '$id' exists, but its drawn box is ${hit.width}x${hit.height}: there is nothing to crop to. " +
+                        "Waited ${timeout}ms."
+                } ?: elementNotFound(id, "${timeout}ms", deadline)
+            )
     }
 }

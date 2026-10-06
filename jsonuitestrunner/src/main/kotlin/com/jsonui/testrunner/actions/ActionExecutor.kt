@@ -21,6 +21,7 @@ import com.jsonui.testrunner.runner.Deadline
 import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
+import com.jsonui.testrunner.runner.ZeroSizeNodes
 import java.io.File
 
 /**
@@ -361,7 +362,14 @@ class ActionExecutor(
 
     private fun executeWaitFor(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("waitFor requires 'id'")
-        waitForElement(id, timeout)
+        // Presence, as on iOS (waitForExistence): an element whose drawn box is
+        // 0 x 0 is not in the accessibility tree, so it is asked of the
+        // semantics tree once By.res has missed (ZeroSizeNodes).
+        val deadline = Deadline.of(timeout)
+        deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
+            device.findObject(By.res(id)) ?: ZeroSizeNodes.find(id).firstOrNull()
+        }?.let { return }
+        throw AssertionError(notFoundMessage(id, timeout, deadline))
     }
 
     private fun executeWaitForAny(step: TestStep, timeout: Long) {
@@ -372,7 +380,9 @@ class ActionExecutor(
 
         val deadline = Deadline.of(timeout)
         // Find by resource-id (Compose testTag)
-        deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { ids.firstOrNull { device.findObject(By.res(it)) != null } }?.let { return }
+        deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
+            ids.firstOrNull { device.findObject(By.res(it)) != null || ZeroSizeNodes.find(it).isNotEmpty() }
+        }?.let { return }
         throw AssertionError(
             "None of elements [${ids.joinToString(", ")}] appeared within ${timeout}ms\n  ${deadline.describe()}"
         )
@@ -1010,8 +1020,12 @@ class ActionExecutor(
     private fun executeReadText(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("readText requires 'id'")
         val variable = step.variable ?: throw IllegalArgumentException("readText requires 'variable'")
-        val element = waitForElement(id, timeout)
-        val text = element.text ?: ""
+        // Read as iOS reads it (value, else label): a 0 x 0 element reads its
+        // semantics text (ZeroSizeNodes), "" when it has none.
+        val deadline = Deadline.of(timeout)
+        val text = deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
+            device.findObject(By.res(id))?.let { it.text ?: "" } ?: ZeroSizeNodes.find(id).firstOrNull()?.text
+        } ?: throw AssertionError(notFoundMessage(id, timeout, deadline))
         val store = variableStore
             ?: throw IllegalStateException("readText requires a variable store (set ActionExecutor.variableStore)")
         store[variable] = text
@@ -1772,10 +1786,22 @@ class ActionExecutor(
         val deadline = Deadline.of(timeout)
         // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
         return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.res(id)) }
-            ?: throw AssertionError(
-                "Element '$id' not found by resource-id within ${timeout}ms\n" +
-                    FindTimeoutReport.render(device, id, deadline) + "\n" + ProjectionProbe.report(id)
-            )
+            ?: throw AssertionError(notFoundMessage(id, timeout, deadline))
+    }
+
+    /**
+     * Why an id was not found. When the id IS on screen on a node whose drawn
+     * box is 0 x 0 (ZeroSizeNodes), it says so instead: the element exists,
+     * as on iOS, but there is nothing to tap, type into, scroll or swipe.
+     */
+    private fun notFoundMessage(id: String, timeout: Long, deadline: Deadline): String {
+        ZeroSizeNodes.find(id).firstOrNull()?.let { hit ->
+            return "Element '$id' exists, but its drawn box is ${hit.width}x${hit.height}: " +
+                "there is nothing to act on (an empty container draws no area). " +
+                "Waited ${timeout}ms."
+        }
+        return "Element '$id' not found by resource-id within ${timeout}ms\n" +
+            FindTimeoutReport.render(device, id, deadline) + "\n" + ProjectionProbe.report(id)
     }
 
     private fun getSwipeCoordinates(direction: String): SwipeCoordinates {

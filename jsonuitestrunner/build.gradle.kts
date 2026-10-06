@@ -59,6 +59,14 @@ dependencies {
     api(libs.androidx.test.rules)
     api(libs.androidx.test.ext.junit)
     api(libs.junit)
+
+    // Read only to find a tagged Compose node whose drawn box is 0 x 0 — Compose
+    // leaves such a node out of the accessibility tree, so By.res cannot see it
+    // (ZeroSizeNodes). compileOnly: the app under test brings its own Compose,
+    // an app without Compose never loads these classes (ZeroSizeNodes checks).
+    // 1.7.2 is the newest compose-ui whose metadata this module's Kotlin 1.9
+    // reads; the four APIs used are public since Compose 1.2.
+    compileOnly(libs.compose.ui)
 }
 
 signing {

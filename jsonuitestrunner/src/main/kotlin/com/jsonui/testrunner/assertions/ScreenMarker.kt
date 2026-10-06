@@ -46,7 +46,7 @@ object ScreenMarker {
     }
 
     /** Screen ids whose markers are currently findable. */
-    private fun presentMarkers(device: UiDevice): List<String> =
+    internal fun presentMarkers(device: UiDevice): List<String> =
         device.findObjects(By.res(java.util.regex.Pattern.compile("\\Q$PREFIX\\E.*")))
             .mapNotNull { it.resourceName }
             .filter { it.startsWith(PREFIX) }
