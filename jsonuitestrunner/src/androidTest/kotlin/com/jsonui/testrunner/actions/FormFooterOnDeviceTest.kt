@@ -123,6 +123,37 @@ class FormFooterOnDeviceTest {
         }
     }
 
+    /**
+     * The red side of the ticket's two stop positions: scrollUntilVisible
+     * stops on arrival with age_field visible and error_label behind the
+     * footer — in the tree, `isVisibleToUser=false`. The following
+     * `visible error_label` must say it is off-screen and name the container
+     * it resolved. Measured 2026-10-08 before 1.15.12: the message said
+     * PRESENT_AT_FAILURE and nothing else (the probe never resolved a
+     * container). Mutation: render without the container and presence turns
+     * this red.
+     */
+    @Test
+    fun aHiddenFollowingItemIsNamedAsOffscreen() {
+        launch()
+        // age_field fully in view, its trailing side clear of the edge, so the
+        // step stops on arrival (measured: start 860 of max 1040 does).
+        scrollTo(860)
+        ActionExecutor(device).execute(TestStep(action = "scrollUntilVisible",
+            id = FormFooterProbeActivity.TARGET_ID, container = FormFooterProbeActivity.SCROLL_ID))
+        val failure = runCatching {
+            AssertionExecutor(device, 3000).execute(
+                TestStep(assert = "visible", id = FormFooterProbeActivity.BELOW_ID, timeout = 1500))
+        }.exceptionOrNull()
+        assertNotNull("error_label must be hidden at scrollY=${scrollY()}", failure)
+        val text = failure!!.message.orEmpty()
+        text.lines().forEach { println("[FormFooterArm] $it") }
+        assertTrue(text, text.contains("isVisibleToUser=false"))
+        assertTrue(text, text.contains("most likely off-screen"))
+        assertTrue(text, text.contains(
+            "scroll container: '${FormFooterProbeActivity.SCROLL_ID}' (from the target's scrollable ancestor)"))
+    }
+
     private fun maxScrollAfterLaunch(): Int {
         launch()
         return maxScroll()

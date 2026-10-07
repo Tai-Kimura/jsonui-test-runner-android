@@ -84,9 +84,17 @@ object ProjectionReport {
         afterClearCache: Set<String>,
         afterServiceResync: Set<String>,
         sampleLimit: Int = 24,
-        offscreen: OffscreenPossibility = OffscreenPossibility.UNKNOWN
+        offscreen: OffscreenPossibility = OffscreenPossibility.UNKNOWN,
+        container: ResolvedContainer? = null,
+        presence: TargetPresence? = null
     ): String {
         val verdict = verdict(id, before, afterClearCache, afterServiceResync)
+        // A resolved container speaks for itself; [offscreen] is the verdict
+        // for a caller that has no container to show.
+        val possibility = container?.possibility ?: offscreen
+        // Only a resolved container gets a line: the UNKNOWN sentences already
+        // say none was resolved.
+        val containerLines = listOfNotNull(container?.let { "  " + it.describe() })
         val lines = mutableListOf(
             "projection probe for '$id': $verdict" +
                 if (verdict == ProjectionVerdict.PRESENT_AT_FAILURE) " (formerly PRESENT_ALL_ALONG)" else "",
@@ -110,7 +118,8 @@ object ProjectionReport {
             // rendered it correctly — reported 2026-09-08 by a face that had
             // to run its suite a second time to tell the two apart. Each
             // branch now says only what the evidence at hand supports.
-            lines += when (offscreen) {
+            lines += containerLines
+            lines += when (possibility) {
                 OffscreenPossibility.NO_ROOM_LEFT ->
                     "  => neither UiAutomator's cache nor a service resync produced it, " +
                         "and the scroll container reports no further room — so it is " +
@@ -126,6 +135,32 @@ object ProjectionReport {
                         "No scroll container was resolved here, so whether it exists " +
                         "off-screen is UNKNOWN — this is not evidence that the app " +
                         "never projected it"
+            }
+        }
+        if (verdict == ProjectionVerdict.PRESENT_AT_FAILURE && presence?.hidden == true) {
+            // A Views ScrollView keeps off-screen children in the tree, so the
+            // census says PRESENT while UiAutomator, which returns only nodes
+            // visible to the user, cannot find it. Without these lines the
+            // report said PRESENT and nothing else — measured 2026-10-08 on a
+            // label behind a fixed footer after the previous step stopped
+            // short of it.
+            lines += "  it IS in the accessibility tree but not visible to the user " +
+                "(isVisibleToUser=false, bounds ${presence.bounds ?: "unknown"}): it exists, " +
+                "outside the viewport or under something drawn over it (a fixed footer, the keyboard)"
+            lines += containerLines
+            lines += when (possibility) {
+                OffscreenPossibility.ROOM_LEFT ->
+                    "  => the scroll container still has room, so it is most likely off-screen: " +
+                        "scroll to '$id' (scrollUntilVisible) before asserting it. A previous " +
+                        "scrollUntilVisible guarantees only that ITS target is visible, not " +
+                        "where the scroll stops"
+                OffscreenPossibility.NO_ROOM_LEFT ->
+                    "  => the scroll container reports no further room, so scrolling will not " +
+                        "bring it in: something is drawn over it, or it lies outside the " +
+                        "scroll's clip"
+                OffscreenPossibility.UNKNOWN ->
+                    "  => no scrollable container was resolved, so whether scrolling would " +
+                        "bring it in is UNKNOWN"
             }
         }
         return lines.joinToString("\n")

@@ -19,6 +19,7 @@ import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.runner.AppWindow
 import com.jsonui.testrunner.runner.Deadline
 import com.jsonui.testrunner.runner.FindTimeoutReport
+import com.jsonui.testrunner.runner.ScrollHistory
 import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
 import com.jsonui.testrunner.runner.ZeroSizeNodes
@@ -322,6 +323,7 @@ class ActionExecutor(
 
     private fun executeScroll(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("scroll requires 'id'")
+        ScrollHistory.previousContainerId = id
         val direction = step.direction ?: throw IllegalArgumentException("scroll requires 'direction'")
 
         // Scroll WITHIN the target element's bounds (parity with `swipe` /
@@ -661,8 +663,21 @@ class ActionExecutor(
         }
     }
 
+    /**
+     * Brings `step.id` into view. ⚠️ It guarantees the target is VISIBLE, not
+     * where the scroll stops: a target that arrives clear of the edge stays
+     * where it arrived, one flush against the trailing edge is moved
+     * [ViewportMargin.LANDING_CLEARANCES] clearances in. The same target can
+     * therefore rest at different offsets depending on where the scroll
+     * started, and its neighbours land inside or outside the viewport
+     * accordingly (ticket android-driver-scroll-until-visible-stops-at-two-
+     * different-offsets-for-the-same-target, ruled: documented, not
+     * normalized). A test that asserts another element afterwards scrolls to
+     * that element itself.
+     */
     private fun executeScrollUntilVisible(step: TestStep) {
         val id = step.id ?: throw IllegalArgumentException("scrollUntilVisible requires 'id'")
+        ScrollHistory.previousContainerId = step.container
         val direction = step.direction ?: "down"
         val timeout = step.timeout?.toLong() ?: 20000L
 

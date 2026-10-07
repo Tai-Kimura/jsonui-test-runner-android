@@ -625,6 +625,7 @@ class JsonUITestRunner(
         currentWarnings = mutableListOf()
         currentTestName = testName
         currentCaseName = testCase.name
+        ScrollHistory.clear()
 
         // Apply load-time args substitution if test case has args
         val processedCase = testLoader?.applyArgsSubstitution(testCase)

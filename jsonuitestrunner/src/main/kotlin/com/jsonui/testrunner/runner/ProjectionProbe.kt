@@ -66,6 +66,65 @@ object ProjectionProbe {
         out
     }.getOrDefault(emptySet())
 
+    private fun hasId(node: AccessibilityNodeInfo, id: String): Boolean =
+        node.viewIdResourceName?.let { it == id || it.endsWith(":id/$id") } == true
+
+    private fun canScroll(node: AccessibilityNodeInfo, action: AccessibilityNodeInfo.AccessibilityAction): Boolean =
+        node.actionList.any { it.id == action.id }
+
+    private fun read(node: AccessibilityNodeInfo, source: ContainerSource) = ResolvedContainer(
+        id = node.viewIdResourceName,
+        source = source,
+        scrollable = node.isScrollable,
+        canScrollForward = canScroll(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD),
+        canScrollBackward = canScroll(node, AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD),
+    )
+
+    /**
+     * The target's node(s) in the app's raw tree, and the scroll container
+     * that decides whether it may lie off-screen — searched in this order:
+     * the target's nearest scrollable ancestor (only reachable when the
+     * target is in the tree: Views), the previous scroll step's container,
+     * then the first scrollable on the app surface. Every source is named in
+     * the report, because the third is a guess about which scroll mattered.
+     */
+    fun targetAndContainer(
+        automation: UiAutomation,
+        packageName: String,
+        id: String,
+        previousContainerId: String?
+    ): Pair<TargetPresence, ResolvedContainer?> {
+        val targets = mutableListOf<AccessibilityNodeInfo>()
+        var previous: AccessibilityNodeInfo? = null
+        var surface: AccessibilityNodeInfo? = null
+        var budget = MAX_NODES
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        automation.rootInActiveWindow?.takeIf { it.packageName == packageName }?.let { queue.add(it) }
+        if (queue.isEmpty()) {
+            automation.windows.forEach { w -> w.root?.takeIf { it.packageName == packageName }?.let { queue.add(it) } }
+        }
+        while (queue.isNotEmpty() && budget > 0) {
+            val node = queue.removeFirst()
+            budget--
+            if (hasId(node, id)) targets += node
+            if (previous == null && previousContainerId != null && hasId(node, previousContainerId)) previous = node
+            if (surface == null && node.isScrollable) surface = node
+            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
+        }
+        val shown = targets.firstOrNull { it.isVisibleToUser } ?: targets.firstOrNull()
+        val presence = TargetPresence(
+            inTree = targets.isNotEmpty(),
+            visibleToUser = targets.any { it.isVisibleToUser },
+            bounds = shown?.let { n -> android.graphics.Rect().also { n.getBoundsInScreen(it) }.toShortString() },
+        )
+        var ancestor = shown?.parent
+        while (ancestor != null && !ancestor.isScrollable) ancestor = ancestor.parent
+        val container = ancestor?.let { read(it, ContainerSource.TARGET_ANCESTOR) }
+            ?: previous?.let { read(it, ContainerSource.PREVIOUS_STEP) }
+            ?: surface?.let { read(it, ContainerSource.SURFACE) }
+        return presence to container
+    }
+
     /**
      * Measure, drop UiAutomator's cache, measure, resync the a11y service,
      * measure. The two recovery steps are applied and reported SEPARATELY
@@ -86,6 +145,8 @@ object ProjectionProbe {
         runCatching { automation.serviceInfo = automation.serviceInfo }
         val afterServiceResync = ownPackageIds(automation, pkg)
 
-        ProjectionReport.render(id, before, afterClearCache, afterServiceResync)
+        val (presence, container) = targetAndContainer(automation, pkg, id, ScrollHistory.previousContainerId)
+        ProjectionReport.render(id, before, afterClearCache, afterServiceResync,
+            container = container, presence = presence)
     }.getOrElse { e -> "projection probe for '$id' failed: ${e.javaClass.simpleName}: ${e.message}" }
 }

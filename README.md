@@ -138,6 +138,7 @@ Test files use JSON format with `.test.json` extension.
 | input | id, value | timeout | Input text |
 | clear | id | timeout | Clear text field |
 | scroll | id, direction | timeout | Scroll |
+| scrollUntilVisible | id | container, direction, timeout | Scroll until the element is visible (fails at once when the end is reached) |
 | swipe | id, direction | timeout | Swipe gesture |
 | waitFor | id | timeout | Wait for element |
 | waitForAny | ids | timeout | Wait for any element |
@@ -146,6 +147,14 @@ Test files use JSON format with `.test.json` extension.
 | screenshot | name | - | Take screenshot |
 
 **Direction values:** `up`, `down`, `left`, `right`
+
+**`scrollUntilVisible` guarantees that its target is visible, not where the
+scroll stops.** The resting offset depends on the path the step took (it
+stops on arrival, or moves a target flush against the trailing edge clear
+of it), so elements next to the target can land inside or outside the
+viewport. To assert another element visible afterwards, scroll to that
+element too (`scrollUntilVisible` with its id) instead of relying on the
+previous stop.
 
 ## Supported Assertions
 
