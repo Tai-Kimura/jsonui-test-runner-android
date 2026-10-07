@@ -908,8 +908,8 @@ class ActionExecutor(
     /**
      * Accessibility-action scrolling: repeatedly performs
      * ACTION_SCROLL_FORWARD/BACKWARD on the container node until the target's
-     * viewId appears in a FRESH rootInActiveWindow tree (no UiObject2 caching,
-     * no coordinates). Returns false when the container is missing / not
+     * viewId appears VISIBLE TO THE USER in a FRESH rootInActiveWindow tree (no
+     * UiObject2 caching, no coordinates). Returns false when the container is missing / not
      * scrollable / the end is reached without finding the target — the caller
      * falls back to gesture scrolling and its end-of-scroll diagnostics.
      */
@@ -939,7 +939,7 @@ class ActionExecutor(
                 // once it has settled and re-approaches it when it is gone
                 // (reapproachAfterLoss); polling this tree for "rest" was tried
                 // and measured useless (it reads the same cache).
-                if (findByViewId(targetId) != null) return@runCatching true
+                if (isVisibleInTree(targetId)) return@runCatching true
                 val container = findByViewId(containerId) ?: return@runCatching false
                 if (!container.isScrollable) return@runCatching false
                 val moved = container.performAction(action)
@@ -950,11 +950,11 @@ class ActionExecutor(
                 NodeCache.clear()
                 if (!moved) {
                     // End of content (or action refused): one final fresh look.
-                    return@runCatching findByViewId(targetId) != null
+                    return@runCatching isVisibleInTree(targetId)
                 }
                 guard++
             }
-            findByViewId(targetId) != null
+            isVisibleInTree(targetId)
         }.getOrDefault(false)
     }
 
@@ -1264,13 +1264,31 @@ class ActionExecutor(
     // Helper functions
 
     /**
+     * The target is in the fresh tree AND visible to the user — the meaning
+     * "found" has for a scroll that stops on it. [findByViewId] alone means
+     * only "in the tree": a Views ScrollView keeps its off-screen children
+     * there with `isVisibleToUser=false` (Compose does not project them), so
+     * "found" by presence stopped the scroll before its first action whenever
+     * the target was below the viewport. Measured 2026-10-08 on a form
+     * (FormFooterOnDeviceTest): 7 of 7 starts below the target failed with 0
+     * settle samples, and the re-approach then dragged the wrong way.
+     * Any visible node with the id counts, not the first node: a repeated id
+     * (list rows) can have an off-screen copy ahead of the on-screen one.
+     */
+    private fun isVisibleInTree(viewId: String): Boolean =
+        findByViewId(viewId) { it.isVisibleToUser } != null
+
+    /**
      * BFS over a FRESH rootInActiveWindow comparing viewIdResourceName
      * directly — findAccessibilityNodeInfosByViewId does NOT match Compose's
      * raw testTag ids (measured: returns nothing for tags that By.res finds),
      * so it would silently turn the a11y scroll path into dead code that
      * always falls back to gestures.
      */
-    private fun findByViewId(viewId: String): android.view.accessibility.AccessibilityNodeInfo? =
+    private fun findByViewId(
+        viewId: String,
+        accept: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean = { true }
+    ): android.view.accessibility.AccessibilityNodeInfo? =
         runCatching {
             val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
             val root = automation.rootInActiveWindow ?: return@runCatching null
@@ -1278,7 +1296,7 @@ class ActionExecutor(
             queue.add(root)
             while (queue.isNotEmpty()) {
                 val node = queue.removeFirst()
-                if (node.viewIdResourceName == viewId) return@runCatching node
+                if (node.viewIdResourceName == viewId && accept(node)) return@runCatching node
                 for (i in 0 until node.childCount) {
                     node.getChild(i)?.let(queue::add)
                 }
