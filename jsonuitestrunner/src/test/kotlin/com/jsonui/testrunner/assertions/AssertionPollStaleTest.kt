@@ -120,10 +120,13 @@ class AssertionPollStaleTest {
     fun theTimeoutRethrowsTheFailureThatActuallyHappened() {
         // Throwing a manufactured AssertionError here would point the reader at
         // a value comparison that never ran.
+        // Since the reason history: the throw goes through
+        // ReasonHistory.failure, which returns `last` itself for one reason
+        // and keeps it as the cause otherwise (ReasonHistoryTest pins both).
         assertTrue(
-            "the timeout branch must rethrow the caught throwable itself",
+            "the timeout branch must throw the caught throwable, or a wrapper whose cause it is",
             // 1.15.9: the deadline is a monotonic Deadline (DeadlineCensusTest).
-            Regex("deadline\\.expired\\(\\)\\)\\s*throw\\s+last").containsMatchIn(code)
+            Regex("deadline\\.expired\\(\\)\\)\\s*throw\\s+history\\.failure\\(\\s*last\\s*,").containsMatchIn(code)
         )
     }
 

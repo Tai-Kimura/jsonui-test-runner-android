@@ -427,19 +427,24 @@ class AssertionExecutor(
      *
      * ⚠️ The throw at timeout is `last`, the exception that ACTUALLY ended the
      * final attempt. Rethrowing a manufactured `AssertionError` would point the
-     * reader at a value comparison that never happened.
+     * reader at a value comparison that never happened. When the reason changed
+     * while waiting, [ReasonHistory.failure] wraps it: `last`'s own message
+     * first, then every reason with its span, and `last` as the cause.
      */
     private fun pollUntil(timeout: Long, searchedId: String?, check: () -> Unit) {
         val deadline = Deadline.of(timeout)
+        val history = ReasonHistory()
+        var lookedAtMs = 0L
         var debugLogged = false
 
         // One body, two catch clauses: the retry policy lives in a single place
         // so a future transient type cannot be handled one way here and another
         // way three lines down.
         fun retryOrRethrow(last: Throwable) {
+            history.observe(ReasonHistory.reasonOf(last), lookedAtMs)
             // The attempt that threw was the last look: the deadline is judged
             // after a look, never after a sleep (Deadline.poll's order).
-            if (deadline.expired()) throw last
+            if (deadline.expired()) throw history.failure(last, deadline.elapsedMs)
 
             // Debug: dump hierarchy once after 2 seconds of element polling
             if (searchedId != null && !debugLogged && deadline.elapsedMs > 2000) {
@@ -454,6 +459,7 @@ class AssertionExecutor(
         }
 
         while (true) {
+            lookedAtMs = deadline.elapsedMs
             try {
                 check()
                 return
