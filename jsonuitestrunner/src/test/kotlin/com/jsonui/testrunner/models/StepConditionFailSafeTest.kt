@@ -39,6 +39,20 @@ class StepConditionFailSafeTest {
     }
 
     @Test
+    fun hiddenIsAKnownKeyAndRoundTrips() {
+        // `when: { hidden: id }` (schema 1.13): before, it was an unknown key,
+        // so the step was skipped fail-safe on this driver.
+        val condition = json.decodeFromString(StepCondition.serializer(), """{ "hidden": "error_banner" }""")
+        assertTrue(condition.unknownKeys.isEmpty())
+        assertEquals("error_banner", condition.hidden)
+        val again = json.decodeFromString(
+            StepCondition.serializer(),
+            json.encodeToString(StepCondition.serializer(), condition)
+        )
+        assertEquals(condition, again)
+    }
+
+    @Test
     fun knownKeysOnlyProduceNoUnknownKeys() {
         val condition = json.decodeFromString(
             StepCondition.serializer(),

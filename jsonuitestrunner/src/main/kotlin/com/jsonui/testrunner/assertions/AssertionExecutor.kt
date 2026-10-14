@@ -13,6 +13,7 @@ import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
 import com.jsonui.testrunner.runner.ZeroSizeNodes
+import com.jsonui.testrunner.runner.HiddenNodes
 import com.jsonui.testrunner.runner.ViewModelStateProvider
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -68,6 +69,7 @@ class AssertionExecutor(
         when (assertion) {
             "visible" -> assertVisible(step, timeout)
             "notVisible" -> assertNotVisible(step, timeout)
+            "hidden" -> assertHidden(step, timeout)
             "enabled" -> assertEnabled(step, timeout)
             "disabled" -> assertDisabled(step, timeout)
             "text" -> assertText(step, timeout)
@@ -144,6 +146,27 @@ class AssertionExecutor(
             }
         }
     }
+
+    /**
+     * Not drawn, wherever it is: absent, gone, or invisible / hidden (HiddenNodes).
+     * A view off screen, under a dialog, at opacity 0 or disabled is drawn, so
+     * `hidden` fails on it — unlike `notVisible`, which is about the viewport.
+     */
+    private fun assertHidden(step: TestStep, timeout: Long) {
+        val id = step.id ?: throw IllegalArgumentException("hidden requires 'id'")
+        pollUntil(timeout, id) {
+            if (!isHidden(id)) {
+                throw AssertionError("Element '$id' should be hidden but it is shown (drawn, wherever it is) after ${timeout}ms")
+            }
+        }
+    }
+
+    /**
+     * The `hidden` predicate, once (also `when: { hidden }`). Without Compose
+     * the semantics tree cannot be read: absent from the accessibility tree is
+     * the best answer there, and it cannot tell off-screen from not drawn.
+     */
+    fun isHidden(id: String): Boolean = HiddenNodes.isHidden(id) ?: (findElement(id) == null)
 
     private fun assertEnabled(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("enabled requires 'id'")

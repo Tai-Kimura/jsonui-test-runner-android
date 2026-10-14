@@ -237,6 +237,8 @@ data class StepCondition(
     val visible: String? = null,
     /** Instant check: element is currently absent or invisible (no polling) */
     val notVisible: String? = null,
+    /** Instant check: element is not drawn (absent, gone or invisible), wherever it is (no polling) */
+    val hidden: String? = null,
     /** Current platform matches (same rules as the step-level `platform` field) */
     val platform: PlatformTarget? = null,
     /** ViewModel state matches (requires a ViewModelStateProvider) */
@@ -245,7 +247,7 @@ data class StepCondition(
     val responsive: ResponsiveCondition? = null,
     /**
      * Raw JSON keys outside the known set
-     * (visible|notVisible|platform|state|responsive), i.e. written against a
+     * (visible|notVisible|hidden|platform|state|responsive), i.e. written against a
      * newer schema than this driver. Non-empty → condition is treated as
      * unmet (skip), never run-anyway, never a hard error.
      */

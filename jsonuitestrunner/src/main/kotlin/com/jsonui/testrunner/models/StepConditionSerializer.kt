@@ -25,14 +25,14 @@ import kotlinx.serialization.json.put
  * That is forbidden: unknown condition keys must be fail-safe SKIP.
  *
  * This serializer reads the raw JsonObject, records every key outside the
- * known set (visible|notVisible|platform|state|responsive) in
+ * known set (visible|notVisible|hidden|platform|state|responsive) in
  * [StepCondition.unknownKeys], then decodes the known fields normally. The
  * runner treats a condition with unknown keys as unmet → step skipped.
  */
 object StepConditionSerializer : KSerializer<StepCondition> {
 
     /** Condition keys this driver can evaluate. Keep in sync with [StepCondition]. */
-    private val KNOWN_KEYS = setOf("visible", "notVisible", "platform", "state", "responsive")
+    private val KNOWN_KEYS = setOf("visible", "notVisible", "hidden", "platform", "state", "responsive")
 
     override val descriptor: SerialDescriptor = buildClassSerialDescriptor("StepCondition")
 
@@ -47,6 +47,7 @@ object StepConditionSerializer : KSerializer<StepCondition> {
         return StepCondition(
             visible = obj.stringOrNull("visible"),
             notVisible = obj.stringOrNull("notVisible"),
+            hidden = obj.stringOrNull("hidden"),
             platform = obj.nonNull("platform")?.let {
                 json.decodeFromJsonElement(PlatformTargetSerializer, it)
             },
@@ -67,6 +68,7 @@ object StepConditionSerializer : KSerializer<StepCondition> {
         val obj = buildJsonObject {
             value.visible?.let { put("visible", it) }
             value.notVisible?.let { put("notVisible", it) }
+            value.hidden?.let { put("hidden", it) }
             value.platform?.let {
                 put("platform", jsonEncoder.json.encodeToJsonElement(PlatformTargetSerializer, it))
             }

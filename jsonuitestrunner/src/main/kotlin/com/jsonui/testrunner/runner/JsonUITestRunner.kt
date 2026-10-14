@@ -814,6 +814,7 @@ class JsonUITestRunner(
         condition.responsive?.let { if (!currentSizeMatches(it)) return false }
         condition.visible?.let { if (device.findObject(By.res(it)) == null) return false }
         condition.notVisible?.let { if (device.findObject(By.res(it)) != null) return false }
+        condition.hidden?.let { if (!assertionExecutor.isHidden(it)) return false }
         condition.state?.let {
             if (!assertionExecutor.stateMatches(it.path, it.equals)) return false
         }
