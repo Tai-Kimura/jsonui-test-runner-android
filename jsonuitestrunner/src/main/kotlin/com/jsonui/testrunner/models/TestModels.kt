@@ -23,10 +23,25 @@ data class ScreenTest(
     /** API mock scenario set applied (and the app relaunched) before the cases run */
     val mocks: Map<String, String>? = null,
     val initialState: InitialState? = null,
+    /**
+     * `SHARED` (absent = shared): setup once, every case in the app state the
+     * previous case left (scroll position, navigation), teardown once.
+     * `REOPEN`: each case starts from a relaunched app, with setup before and
+     * teardown after it. An unknown value fails the load instead of running
+     * as shared.
+     */
+    val caseIsolation: CaseIsolation? = null,
     val setup: List<TestStep>? = null,
     val teardown: List<TestStep>? = null,
     val cases: List<TestCase>
 )
+
+/** Per-file case isolation — see [ScreenTest.caseIsolation]. */
+@Serializable
+enum class CaseIsolation {
+    @SerialName("shared") SHARED,
+    @SerialName("reopen") REOPEN
+}
 
 @Serializable
 data class TestSource(
