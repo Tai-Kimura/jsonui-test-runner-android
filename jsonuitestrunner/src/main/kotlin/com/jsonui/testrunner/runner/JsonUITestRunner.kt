@@ -11,6 +11,7 @@ import com.jsonui.testrunner.models.FlowTest
 import com.jsonui.testrunner.models.FlowTestStep
 import com.jsonui.testrunner.models.LaunchConfig
 import com.jsonui.testrunner.models.RunNotices
+import com.jsonui.testrunner.models.CaseIsolation
 import com.jsonui.testrunner.models.RunOrientationFloor
 import com.jsonui.testrunner.models.ResponsiveCondition
 import com.jsonui.testrunner.models.ResponsiveThresholds
@@ -333,13 +334,43 @@ class JsonUITestRunner(
             relaunchApp(reason, launchExtras(test.launch))
         }
 
-        // Run setup once. If it throws, every case is recorded as failed but
-        // teardown still runs (§7 teardown guarantee).
         // Artifact identity for this file (setup/teardown captures carry the
         // phase name until runTestCase overwrites the case name).
         currentTestName = test.metadata.name
         currentCaseName = "setup"
 
+        if (test.caseIsolation == CaseIsolation.REOPEN) {
+            runCasesReopened(test, results)
+        } else {
+            runCasesShared(test, results)
+        }
+
+        // Reset mock scenarios so state does not leak into the next test file.
+        if (test.mocks != null) {
+            runCatching { mockClient?.reset() }
+        }
+
+        // Survive the connectedAndroidTest post-run uninstall (see the method doc).
+        mirrorArtifactsForPull(test.metadata.name)
+
+        val totalDuration = System.currentTimeMillis() - startTime
+        val suiteResult = TestSuiteResult(
+            suiteName = test.metadata.name,
+            results = results,
+            totalDurationMs = totalDuration
+        )
+        writeResultsIfNeeded(suiteResult)
+        return suiteResult
+    }
+
+    /**
+     * `caseIsolation: "shared"` (the default): setup once, every case in the
+     * app state the previous case left (its scroll position, the screen it
+     * navigated to), teardown once. The order of the cases matters.
+     */
+    private fun runCasesShared(test: ScreenTest, results: MutableList<TestResult>) {
+        // Run setup once. If it throws, every case is recorded as failed but
+        // teardown still runs (§7 teardown guarantee).
         var setupError: String? = null
         test.setup?.let { setup ->
             log("Running setup...")
@@ -355,27 +386,9 @@ class JsonUITestRunner(
 
         // Run test cases
         for (testCase in test.cases) {
-            val skipFlag = testCase.skip == true
-            val platformMet = testCase.platform?.includes(config.platform) != false
-            // The responsive gate is only resolved when the cheaper static gates
-            // pass; skip-reason precedence (platform wins when both gates are
-            // unmet) is encoded in resolveCaseSkip.
-            val responsiveMet = if (!skipFlag && platformMet) {
-                testCase.responsive?.let { currentSizeMatches(it) }
-            } else {
-                null
-            }
-            val caseSkip = resolveCaseSkip(skipFlag, platformMet, responsiveMet)
-            if (caseSkip != null) {
-                log("Skipping case ${testCase.name}${caseSkip.reason?.let { " - $it mismatch" } ?: ""}")
-                results.add(TestResult(
-                    testName = test.metadata.name,
-                    caseName = testCase.name,
-                    passed = true,
-                    skipped = true,
-                    skipReason = caseSkip.reason,
-                    durationMs = 0
-                ))
+            val gated = gateRow(test.metadata.name, testCase)
+            if (gated != null) {
+                results.add(gated)
                 continue
             }
             if (setupError != null) {
@@ -421,22 +434,113 @@ class JsonUITestRunner(
             }
         }
 
-        // Reset mock scenarios so state does not leak into the next test file.
-        if (test.mocks != null) {
-            runCatching { mockClient?.reset() }
+    }
+
+    /**
+     * `caseIsolation: "reopen"`: every case that runs starts from a freshly
+     * launched app. Before each case the file's mock scenarios and launch
+     * state are re-applied, the app is relaunched with the file's launch
+     * extras ([relaunchApp]), and the run orientation is re-applied; then
+     * setup, the case, and teardown. A gated case launches nothing; each
+     * retry attempt relaunches too.
+     *
+     * Failure semantics per case, as the shared path has them per file: a
+     * reopen or setup failure fails that case (failureReason `setup`, or the
+     * stage the error carries for mock / launch) and its teardown still
+     * runs; a teardown failure is an extra `teardown` row.
+     */
+    private fun runCasesReopened(test: ScreenTest, results: MutableList<TestResult>) {
+        val reason = "caseIsolation:reopen" +
+            (relaunchReason(mocks = test.mocks != null, launch = test.launch != null)?.let { "+$it" } ?: "")
+        results.addAll(ReopenedCases.run(
+            cases = test.cases,
+            retries = config.caseRetries,
+            hooks = ReopenedCases.Hooks(
+                gate = { gateRow(test.metadata.name, it) },
+                reopen = {
+                    currentCaseName = "setup"
+                    test.mocks?.let { requireMockClient("mocks").scenarioSet(it) }
+                    test.launch?.let { applyLaunchState(it) }
+                    relaunchApp(reason, launchExtras(test.launch))
+                    applyRunOrientation(test.orientation)
+                },
+                setup = {
+                    test.setup?.let { setup ->
+                        log("Running setup...")
+                        executeSteps(setup, mutableListOf())
+                    }
+                },
+                body = { runTestCase(test.metadata.name, it) },
+                teardown = {
+                    test.teardown?.let { teardown ->
+                        log("Running teardown...")
+                        currentCaseName = "teardown"
+                        executeSteps(teardown, mutableListOf())
+                    }
+                },
+                setupFailed = { testCase, e ->
+                    log("Case ${testCase.name}: setup failed: ${e.message}")
+                    // Mock and launch failures keep their own stage; anything
+                    // else threw from the setup steps.
+                    val staged = e is LaunchConfigException ||
+                        FailureClassifier.wireValue(e) == FailureReason.MOCK.wireValue
+                    TestResult(
+                        testName = test.metadata.name,
+                        caseName = testCase.name,
+                        passed = false,
+                        error = if (staged) describeFailure(e) else "setup failed: ${describeFailure(e)}",
+                        failureReason = if (staged) FailureClassifier.wireValue(e) else FailureReason.SETUP.wireValue,
+                        durationMs = 0
+                    )
+                },
+                teardownFailed = { testCase, e ->
+                    log("Teardown failed after ${testCase.name}: ${e.message}")
+                    TestResult(
+                        testName = test.metadata.name,
+                        caseName = "teardown",
+                        passed = false,
+                        error = "after case '${testCase.name}': ${describeFailure(e)}",
+                        failureReason = FailureReason.TEARDOWN.wireValue,
+                        durationMs = 0
+                    )
+                },
+                isPass = { it.passed },
+                stampAttempts = { r, n -> r.copy(attempts = n) },
+                rethrowIfFatal = { rethrowIfFatal(it) },
+                onRetry = { n, max -> log("  Case $currentCaseName failed — retry attempt $n/$max (re-opening)") }
+            )
+        ))
+    }
+
+    /**
+     * The gates a case passes before anything runs — `skip`, case-level
+     * platform, case-level responsive. Returns the skipped row, or null when
+     * the case should run.
+     */
+    private fun gateRow(testName: String, testCase: TestCase): TestResult? {
+        val skipFlag = testCase.skip == true
+        val platformMet = testCase.platform?.includes(config.platform) != false
+        // The responsive gate is only resolved when the cheaper static gates
+        // pass; skip-reason precedence (platform wins when both gates are
+        // unmet) is encoded in resolveCaseSkip.
+        val responsiveMet = if (!skipFlag && platformMet) {
+            testCase.responsive?.let { currentSizeMatches(it) }
+        } else {
+            null
         }
-
-        // Survive the connectedAndroidTest post-run uninstall (see the method doc).
-        mirrorArtifactsForPull(test.metadata.name)
-
-        val totalDuration = System.currentTimeMillis() - startTime
-        val suiteResult = TestSuiteResult(
-            suiteName = test.metadata.name,
-            results = results,
-            totalDurationMs = totalDuration
-        )
-        writeResultsIfNeeded(suiteResult)
-        return suiteResult
+        val caseSkip = resolveCaseSkip(skipFlag, platformMet, responsiveMet)
+        if (caseSkip != null) {
+            log("Skipping case ${testCase.name}${caseSkip.reason?.let { " - $it mismatch" } ?: ""}")
+            return TestResult(
+                testName = testName,
+                caseName = testCase.name,
+                passed = true,
+                skipped = true,
+                skipReason = caseSkip.reason,
+                durationMs = 0
+            )
+        }
+        return null
     }
 
     /**
