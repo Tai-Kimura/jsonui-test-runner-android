@@ -121,6 +121,35 @@ class InitialStateVectorsTest {
         assertEquals(listOf("home", "home@L1"), awaited)
     }
 
+    /**
+     * A second flow file that starts on the screen the first one ended on, and
+     * a retried attempt: each attempt's head forgets the screen, so it is
+     * verified and its receipt checked again, and `state` reads nothing until
+     * a step names a screen.
+     */
+    @Test
+    fun aFlowAttemptStartsWithNoScreenEvenOnTheScreenTheLastFlowEndedOn() {
+        val screens = FlowScreens()
+        val verified = mutableListOf<String>()
+        val awaited = mutableListOf<String>()
+        fun arrive(screen: String, receipts: FlowReceipts) =
+            screens.arrive(screen, receipts, verify = { verified += it }, await = { s, l -> awaited += "$s@$l" })
+
+        // Flow 1 ends on home.
+        screens.startAttempt()
+        arrive("home", FlowReceipts())
+        arrive("home", FlowReceipts())
+        assertEquals(listOf("home"), verified)
+
+        // Flow 2 starts on home, with a payload for it.
+        screens.startAttempt()
+        assertEquals("state reads no screen before a step names one", null, screens.state)
+        arrive("home", FlowReceipts(mapOf("home" to "L2")))
+        assertEquals(listOf("home", "home"), verified)
+        assertEquals(listOf("home@L2"), awaited)
+        assertEquals("home", screens.state)
+    }
+
     @Test
     fun screenIds() {
         assertEquals("ProductDetail", ScreenIdentity.screenId("Layouts/ProductDetail.json"))

@@ -173,6 +173,43 @@ class FlowReceipts(pending: Map<String, String> = emptyMap()) {
     }
 }
 
+/**
+ * Where a flow is: the screen the last verified step ran on ([tracked], null =
+ * unknown, so the next step that names a screen is verified) and the screen
+ * `state` reads ([state]). Both start empty at the head of every flow attempt
+ * — the first attempt of a file included — so neither a retried body nor the
+ * next flow file inherits the screen a previous one ended on: that screen's
+ * verification and its receipt would be skipped, and `state` before the first
+ * named step would read it.
+ */
+class FlowScreens {
+    var tracked: String? = null
+        private set
+    var state: String? = null
+
+    fun startAttempt() {
+        tracked = null
+        state = null
+    }
+
+    /** A screen tracked by something other than a step (a file reference resets it). */
+    fun forget() {
+        tracked = null
+    }
+
+    /**
+     * Before an inline step that names [screen]: `state` reads it; when it is
+     * not the screen already verified, [verify] it, then check its receipt.
+     */
+    fun arrive(screen: String, receipts: FlowReceipts, verify: (String) -> Unit, await: (String, String) -> Unit) {
+        state = screen
+        if (screen == tracked) return
+        verify(screen)
+        tracked = screen
+        receipts.checkOnArrival(screen, await)
+    }
+}
+
 /** The `JSONUI_TEST_INITIAL_STATE` value (spec §10.2). */
 object InitialStatePayload {
     const val EXTRA = "JSONUI_TEST_INITIAL_STATE"

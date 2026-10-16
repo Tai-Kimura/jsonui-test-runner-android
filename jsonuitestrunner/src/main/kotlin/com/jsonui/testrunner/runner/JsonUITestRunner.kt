@@ -234,7 +234,12 @@ class JsonUITestRunner(
      * file's screen. A harness that hosts screens itself (the conformance
      * host) sets it before running.
      */
-    var stateScreen: String? = null
+    var stateScreen: String?
+        get() = flowScreens.state
+        set(value) { flowScreens.state = value }
+
+    /** Where a flow is (FlowScreens); [stateScreen] lives in it. */
+    private val flowScreens = FlowScreens()
 
     private val actionExecutor = ActionExecutor(device, config.defaultTimeout).apply {
         // Route `screenshot` action steps through the same (config-aware)
@@ -695,8 +700,6 @@ class JsonUITestRunner(
             relaunchApp(reason, launchExtras(test.launch, payload?.text))
         }
         flowReceipts = FlowReceipts(payload?.let { p -> p.screens.keys.associateWith { p.launchId } }.orEmpty())
-        stateScreen = null
-        trackedScreen = null
         val initialStateWarnings = plan.warnings.map { InitialStatePlan.message(it) }
         initialStateWarnings.forEach { log("Warning: $it") }
 
@@ -721,9 +724,10 @@ class JsonUITestRunner(
             flowAttempts++
             flowError = null
             currentWarnings = mutableListOf()
-            // A retried body starts unverified: its first screen is checked
-            // again, its pending receipt included.
-            trackedScreen = null
+            // Every attempt — a file's first one too — starts with no screen
+            // verified and none for `state`: a retried body or the next flow
+            // file checks its first screen again, its pending receipt included.
+            flowScreens.startAttempt()
             startCaseRecording(test.metadata.name, "flow")
 
             try {
@@ -1219,12 +1223,6 @@ class JsonUITestRunner(
         )
 
     /**
-     * The screen the previously executed inline step ran on; null means
-     * "unknown", which forces the next inline step to be verified.
-     */
-    private var trackedScreen: String? = null
-
-    /**
      * Implicit screen verification (canon: implicitVerification). Runs BEFORE
      * the step, because the step is meant to run ON that screen.
      */
@@ -1236,22 +1234,22 @@ class JsonUITestRunner(
 
     private fun verifyScreenTransitionIfNeeded(step: FlowTestStep) {
         val screen = step.screen ?: return
-        // `state` reads the screen the step names (else the last one named).
-        stateScreen = screen
-        // Same screen as the last executed step: nothing has changed.
-        if (screen == trackedScreen) return
-
-        if (config.verifyScreenTransitions) {
-            assertionExecutor.execute(
-                TestStep(assert = "screen", name = screen, timeout = config.screenTransitionTimeout.toInt())
-            )
-        }
-        trackedScreen = screen
-        // The first time the flow reaches a screen its initialState named,
-        // the screen confirms it (spec §10.5); it stays pending until it has.
-        flowReceipts.checkOnArrival(screen) { screenId, launchId ->
-            StateBridge.awaitReceipt(screenId, launchId, config.screenReadyTimeout)
-        }
+        // `state` reads the screen the step names (else the last one named);
+        // a screen not yet verified is verified, then its receipt checked —
+        // the first time the flow reaches a screen its initialState named, the
+        // screen confirms it (spec §10.5), and it stays pending until it has.
+        flowScreens.arrive(
+            screen,
+            flowReceipts,
+            verify = {
+                if (config.verifyScreenTransitions) {
+                    assertionExecutor.execute(
+                        TestStep(assert = "screen", name = it, timeout = config.screenTransitionTimeout.toInt())
+                    )
+                }
+            },
+            await = { screenId, launchId -> StateBridge.awaitReceipt(screenId, launchId, config.screenReadyTimeout) }
+        )
     }
 
     private fun executeFlowStep(step: FlowTestStep, warnings: MutableList<String>) {
@@ -1268,7 +1266,7 @@ class JsonUITestRunner(
             // A file reference carries no screen of its own, and the case it
             // runs may end anywhere — reset to unknown so the next inline
             // step is verified rather than trusted.
-            trackedScreen = null
+            flowScreens.forget()
             executeFileReferenceStep(step, warnings)
             return
         }
