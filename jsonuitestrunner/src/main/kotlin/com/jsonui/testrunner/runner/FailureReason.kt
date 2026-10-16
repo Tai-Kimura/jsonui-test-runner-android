@@ -59,6 +59,8 @@ object FailureClassifier {
             is MockClientException -> FailureReason.MOCK
             is CaseNotFoundException, is NotAScreenTestException -> FailureReason.INVALID_TEST
             is LaunchConfigException -> FailureReason.LAUNCH
+            // The app did not confirm the initialState payload (spec §10.5).
+            is InitialStateNotConfirmedException -> FailureReason.SETUP
             // Ordered after LaunchConfigException, which extends it.
             is IllegalStateException -> FailureReason.OTHER
             // The step could not be executed as written: a missing or

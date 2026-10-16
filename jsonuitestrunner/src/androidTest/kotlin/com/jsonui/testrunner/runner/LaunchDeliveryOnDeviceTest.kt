@@ -2,6 +2,7 @@ package com.jsonui.testrunner.runner
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.jsonui.testrunner.models.InitialState
 import com.jsonui.testrunner.models.LaunchConfig
 import com.jsonui.testrunner.models.ScreenTest
 import com.jsonui.testrunner.models.TestCase
@@ -41,15 +42,17 @@ class LaunchDeliveryOnDeviceTest {
         TestRunnerConfig(
             defaultTimeout = 500L,
             screenshotOnFailure = false,
-            verifyScreenTransitions = false
+            verifyScreenTransitions = false,
+            screenReadyTimeout = 1500L
         )
     )
 
-    private fun screenTest(launch: LaunchConfig?) = ScreenTest(
+    private fun screenTest(launch: LaunchConfig?, initialState: InitialState? = null) = ScreenTest(
         type = "screen",
         source = TestSource(layout = "launch_probe"),
         metadata = TestMetadata(name = "LaunchProbe"),
         launch = launch,
+        initialState = initialState,
         cases = listOf(
             TestCase(
                 name = "noop",
@@ -109,6 +112,44 @@ class LaunchDeliveryOnDeviceTest {
         // Completion is the negative measurement: with `pm clear` this line
         // was never reached — the process died before any result existed.
         assertEquals("run did not complete", 1, suite.results.size)
+    }
+
+    /**
+     * initialState (spec §10.2, §10.5): the payload rides the one relaunch
+     * beside the arguments, and the app's receipt is awaited. The probe has
+     * no state bridge, so the receipt never comes: the case fails `setup`
+     * with the causes listed, after screenReadyTimeout — not at once, and
+     * not by running the case against default values.
+     */
+    @Test
+    fun theInitialStateRidesTheOneRelaunchAndAnUnconfirmedOneFailsSetup() {
+        LaunchProbeActivity.reset()
+        val started = System.currentTimeMillis()
+        val suite = runner().runScreenTest(
+            screenTest(
+                LaunchConfig(arguments = mapOf("probe" to JsonPrimitive("hello"))),
+                InitialState(viewModel = mapOf("email" to JsonPrimitive("a@example.com")))
+            )
+        )
+        val elapsed = System.currentTimeMillis() - started
+
+        assertEquals("launch + initialState share one relaunch", 1, LaunchProbeActivity.launches.get())
+        assertNotNull("JSONUI_TEST_ARGS still rides the intent", LaunchProbeActivity.lastArgs)
+        val sent = LaunchProbeActivity.lastInitialState
+        assertNotNull("JSONUI_TEST_INITIAL_STATE extra missing", sent)
+        val payload = Json.parseToJsonElement(sent!!).jsonObject
+        assertEquals(1, payload["version"]!!.jsonPrimitive.int)
+        assertTrue("a launchId", payload["launchId"]!!.jsonPrimitive.content.isNotEmpty())
+        assertEquals(
+            "a@example.com",
+            payload["screens"]!!.jsonObject["launch_probe"]!!.jsonObject["email"]!!.jsonPrimitive.content
+        )
+
+        val row = suite.results.single()
+        assertFalse(row.passed)
+        assertEquals("setup", row.failureReason)
+        assertTrue(row.error, row.error!!.contains("initialState for 'launch_probe' was not confirmed"))
+        assertTrue("waited for the receipt ($elapsed ms)", elapsed >= 1500L)
     }
 
     @Test

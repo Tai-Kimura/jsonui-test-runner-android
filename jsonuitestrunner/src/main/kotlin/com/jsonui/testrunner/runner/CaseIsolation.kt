@@ -14,8 +14,12 @@ internal object ReopenedCases {
     class Hooks<R>(
         /** The skipped row for a case gated out (skip / platform / responsive), or null. */
         val gate: (TestCase) -> R?,
-        /** Bring the screen up afresh (re-apply mocks and launch state, relaunch, re-apply orientation). */
-        val reopen: () -> Unit,
+        /**
+         * Bring the screen up afresh for this case (re-apply mocks and launch
+         * state, relaunch with the case's initialState, re-apply orientation,
+         * wait for the receipt).
+         */
+        val reopen: (TestCase) -> Unit,
         val setup: () -> Unit,
         val body: (TestCase) -> R,
         val teardown: () -> Unit,
@@ -53,7 +57,7 @@ internal object ReopenedCases {
                 onRetry = hooks.onRetry
             ) {
                 val result = try {
-                    hooks.reopen()
+                    hooks.reopen(testCase)
                     hooks.setup()
                     hooks.body(testCase)
                 } catch (e: Throwable) {

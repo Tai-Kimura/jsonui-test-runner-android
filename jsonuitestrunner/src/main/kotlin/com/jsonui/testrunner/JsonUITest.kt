@@ -86,6 +86,7 @@ object JsonUITest {
         private var screenshotDir: java.io.File? = null
         private var record: Boolean = false
         private var keepRecordingOnSuccess: Boolean = false
+        private var screenReadyTimeout: Long = 15000L
 
         fun defaultTimeout(timeout: Long) = apply { this.defaultTimeout = timeout }
         fun screenshotOnFailure(enabled: Boolean) = apply { this.screenshotOnFailure = enabled }
@@ -97,6 +98,9 @@ object JsonUITest {
         /** Keep recordings of passing cases too (default: failures only) */
         fun keepRecordingOnSuccess(enabled: Boolean) = apply { this.keepRecordingOnSuccess = enabled }
 
+        /** How long to wait for the app to confirm an initialState (spec §10.5); 15000 ms by default. */
+        fun screenReadyTimeout(timeout: Long) = apply { this.screenReadyTimeout = timeout }
+
         fun build(): JsonUITestRunner {
             return JsonUITestRunner(
                 TestRunnerConfig(
@@ -106,7 +110,8 @@ object JsonUITest {
                     verbose = verbose,
                     screenshotDir = screenshotDir,
                     record = record,
-                    keepRecordingOnSuccess = keepRecordingOnSuccess
+                    keepRecordingOnSuccess = keepRecordingOnSuccess,
+                    screenReadyTimeout = screenReadyTimeout
                 )
             )
         }

@@ -21,6 +21,11 @@ class LaunchDecisionTest {
         assertEquals("mocks", relaunchReason(mocks = true, launch = false))
         assertEquals("launch", relaunchReason(mocks = false, launch = true))
         assertEquals("mocks+launch", relaunchReason(mocks = true, launch = true))
+        // initialState (spec §10.2) is a reason of its own, and shares the one relaunch.
+        assertEquals("initialState", relaunchReason(mocks = false, launch = false, initialState = true))
+        assertEquals("mocks+initialState", relaunchReason(mocks = true, launch = false, initialState = true))
+        assertEquals("launch+initialState", relaunchReason(mocks = false, launch = true, initialState = true))
+        assertEquals("mocks+launch+initialState", relaunchReason(mocks = true, launch = true, initialState = true))
     }
 
     @Test
@@ -33,5 +38,12 @@ class LaunchDecisionTest {
         )
         assertEquals(setOf("JSONUI_TEST_ARGS"), extras.keys)
         assertEquals("""{"probe":"hello"}""", extras["JSONUI_TEST_ARGS"])
+    }
+
+    @Test
+    fun launchExtrasCarryTheInitialStatePayloadBesideTheArguments() {
+        assertEquals(mapOf("JSONUI_TEST_INITIAL_STATE" to "{}"), launchExtras(null, "{}"))
+        val both = launchExtras(LaunchConfig(arguments = mapOf("probe" to JsonPrimitive("hello"))), "{}")
+        assertEquals(setOf("JSONUI_TEST_ARGS", "JSONUI_TEST_INITIAL_STATE"), both.keys)
     }
 }

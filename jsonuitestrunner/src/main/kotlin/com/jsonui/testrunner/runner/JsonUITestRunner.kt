@@ -48,6 +48,12 @@ data class TestRunnerConfig(
      * start.
      */
     val screenTransitionTimeout: Long = 10000L,
+    /**
+     * How long the driver waits, after a launch that carried an initialState
+     * payload, for the screen to confirm it on its state bridge (spec §10.5).
+     * Same name and default as the web driver's setting.
+     */
+    val screenReadyTimeout: Long = 15000L,
     val screenshotOnFailure: Boolean = true,
     val platform: String = "android",
     val verbose: Boolean = false,
@@ -126,21 +132,34 @@ private val ANDROID_PERMISSION_MAP = mapOf(
  * start that carries it. Returns the reason to log, or null for no relaunch.
  * A pure function so the JVM suite can pin the truth table.
  */
-internal fun relaunchReason(mocks: Boolean, launch: Boolean): String? = when {
-    mocks && launch -> "mocks+launch"
-    mocks -> "mocks"
-    launch -> "launch"
-    else -> null
-}
+internal fun relaunchReason(mocks: Boolean, launch: Boolean, initialState: Boolean = false): String? =
+    listOfNotNull("mocks".takeIf { mocks }, "launch".takeIf { launch }, "initialState".takeIf { initialState })
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString("+")
 
 /**
  * The arguments half of a launch configuration, as intent extras: the JSON
  * object rides JSONUI_TEST_ARGS and the app reads it off the launched
  * activity's intent (see LaunchConfig).
  */
-internal fun launchExtras(launch: LaunchConfig?): Map<String, String> {
-    val args = launch?.arguments ?: return emptyMap()
-    return mapOf("JSONUI_TEST_ARGS" to kotlinx.serialization.json.JsonObject(args).toString())
+internal fun launchExtras(launch: LaunchConfig?, initialStatePayload: String? = null): Map<String, String> {
+    val extras = LinkedHashMap<String, String>()
+    launch?.arguments?.let { extras["JSONUI_TEST_ARGS"] = kotlinx.serialization.json.JsonObject(it).toString() }
+    initialStatePayload?.let { extras[InitialStatePayload.EXTRA] = it }
+    return extras
+}
+
+/**
+ * A launch's payload and its id (spec §10.2), or null when the launch carries
+ * none. One fresh launchId per launch.
+ */
+internal data class PreparedPayload(val launchId: String, val screens: Map<String, Map<String, kotlinx.serialization.json.JsonElement>>) {
+    val text: String get() = InitialStatePayload.encode(screens, launchId)
+
+    companion object {
+        fun of(launch: InitialStatePlan.Launch?): PreparedPayload? =
+            launch?.screens?.let { PreparedPayload(java.util.UUID.randomUUID().toString(), it) }
+    }
 }
 
 /**
@@ -198,12 +217,24 @@ class JsonUITestRunner(
         ScreenRecorder(InstrumentationRegistry.getInstrumentation().uiAutomation)
     }
 
-    /** State provider for `state` assertions/conditions; inject before running. */
+    /**
+     * State provider for `state` assertions/conditions. Optional: without one,
+     * `state` reads the state bridge of the screen [stateScreen] names
+     * (KotlinJsonUI >= 2.44.0, spec §10.5). A provider the harness passes wins.
+     */
     var stateProvider: ViewModelStateProvider? = null
         set(value) {
             field = value
             assertionExecutor.stateProvider = value
         }
+
+    /**
+     * The screen `state` reads when no provider is set: the screen under test,
+     * a flow step's screen (else the last one named), a referenced case's own
+     * file's screen. A harness that hosts screens itself (the conformance
+     * host) sets it before running.
+     */
+    var stateScreen: String? = null
 
     private val actionExecutor = ActionExecutor(device, config.defaultTimeout).apply {
         // Route `screenshot` action steps through the same (config-aware)
@@ -216,6 +247,7 @@ class JsonUITestRunner(
         baselineDir = config.baselineDir
         updateBaselines = config.updateBaselines
         warningHandler = { message -> currentWarnings.add(message) }
+        bridgeState = BridgeStateSource({ stateScreen })
     }
 
     /** Test loader for file reference resolution */
@@ -330,8 +362,26 @@ class JsonUITestRunner(
             writeResultsIfNeeded(suiteResult)
             return suiteResult
         }
-        relaunchReason(mocks = test.mocks != null, launch = test.launch != null)?.let { reason ->
-            relaunchApp(reason, launchExtras(test.launch))
+        // initialState (spec §10.2): which launches carry which payload. Under
+        // reopen every launch is a case's (runCasesReopened); the file-level
+        // relaunch below stays the mocks / launch one it was.
+        val plan = InitialStatePlan.plan(test)
+        val screenId = ScreenIdentity.screenId(test.source.layout)
+        stateScreen = screenId
+        val filePayload = if (test.caseIsolation == CaseIsolation.REOPEN) null else PreparedPayload.of(plan.fileLaunch)
+        relaunchReason(mocks = test.mocks != null, launch = test.launch != null, initialState = filePayload != null)?.let { reason ->
+            relaunchApp(reason, launchExtras(test.launch, filePayload?.text))
+        }
+        // The receipt (§10.5): no confirmation fails every case of the file
+        // with `setup`, as a failed setup does.
+        val receiptError = filePayload?.let { payload ->
+            try {
+                StateBridge.awaitReceipt(screenId, payload.launchId, config.screenReadyTimeout)
+                null
+            } catch (e: InitialStateNotConfirmedException) {
+                log("initialState: ${e.message}")
+                e.message
+            }
         }
 
         // Artifact identity for this file (setup/teardown captures carry the
@@ -340,9 +390,9 @@ class JsonUITestRunner(
         currentCaseName = "setup"
 
         if (test.caseIsolation == CaseIsolation.REOPEN) {
-            runCasesReopened(test, results)
+            runCasesReopened(test, plan, screenId, results)
         } else {
-            runCasesShared(test, results)
+            runCasesShared(test, plan, receiptError, results)
         }
 
         // Reset mock scenarios so state does not leak into the next test file.
@@ -368,11 +418,17 @@ class JsonUITestRunner(
      * app state the previous case left (its scroll position, the screen it
      * navigated to), teardown once. The order of the cases matters.
      */
-    private fun runCasesShared(test: ScreenTest, results: MutableList<TestResult>) {
+    private fun runCasesShared(
+        test: ScreenTest,
+        plan: InitialStatePlan,
+        receiptError: String?,
+        results: MutableList<TestResult>
+    ) {
         // Run setup once. If it throws, every case is recorded as failed but
-        // teardown still runs (§7 teardown guarantee).
-        var setupError: String? = null
-        test.setup?.let { setup ->
+        // teardown still runs (§7 teardown guarantee). An initialState the app
+        // did not confirm is a setup failure of the same kind (spec §10.5).
+        var setupError: String? = receiptError
+        if (setupError == null) test.setup?.let { setup ->
             log("Running setup...")
             try {
                 val warnings = mutableListOf<String>()
@@ -397,6 +453,20 @@ class JsonUITestRunner(
                     caseName = testCase.name,
                     passed = false,
                     error = "setup failed: $setupError",
+                    failureReason = FailureReason.SETUP.wireValue,
+                    durationMs = 0
+                ))
+                continue
+            }
+            // A case-level initialState under shared has no launch to ride:
+            // that case fails, the others run (spec §10.2).
+            val caseFailure = plan.caseFailures.firstOrNull { it.caseName == testCase.name }
+            if (caseFailure != null) {
+                results.add(TestResult(
+                    testName = test.metadata.name,
+                    caseName = testCase.name,
+                    passed = false,
+                    error = InitialStatePlan.message(caseFailure),
                     failureReason = FailureReason.SETUP.wireValue,
                     durationMs = 0
                 ))
@@ -449,20 +519,30 @@ class JsonUITestRunner(
      * stage the error carries for mock / launch) and its teardown still
      * runs; a teardown failure is an extra `teardown` row.
      */
-    private fun runCasesReopened(test: ScreenTest, results: MutableList<TestResult>) {
-        val reason = "caseIsolation:reopen" +
-            (relaunchReason(mocks = test.mocks != null, launch = test.launch != null)?.let { "+$it" } ?: "")
+    private fun runCasesReopened(
+        test: ScreenTest,
+        plan: InitialStatePlan,
+        screenId: String,
+        results: MutableList<TestResult>
+    ) {
         results.addAll(ReopenedCases.run(
             cases = test.cases,
             retries = config.caseRetries,
             hooks = ReopenedCases.Hooks(
                 gate = { gateRow(test.metadata.name, it) },
-                reopen = {
+                reopen = { testCase ->
                     currentCaseName = "setup"
                     test.mocks?.let { requireMockClient("mocks").scenarioSet(it) }
                     test.launch?.let { applyLaunchState(it) }
-                    relaunchApp(reason, launchExtras(test.launch))
+                    // The file's initialState merged with the case's (spec §10.2).
+                    val payload = PreparedPayload.of(plan.caseLaunch(testCase.name))
+                    val reason = "caseIsolation:reopen" + (relaunchReason(
+                        mocks = test.mocks != null, launch = test.launch != null, initialState = payload != null
+                    )?.let { "+$it" } ?: "")
+                    relaunchApp(reason, launchExtras(test.launch, payload?.text))
                     applyRunOrientation(test.orientation)
+                    stateScreen = screenId
+                    payload?.let { StateBridge.awaitReceipt(screenId, it.launchId, config.screenReadyTimeout) }
                 },
                 setup = {
                     test.setup?.let { setup ->
@@ -603,9 +683,22 @@ class JsonUITestRunner(
             writeResultsIfNeeded(suiteResult)
             return suiteResult
         }
-        relaunchReason(mocks = test.mocks != null, launch = test.launch != null)?.let { reason ->
-            relaunchApp(reason, launchExtras(test.launch))
+        // initialState (spec §10.2): viewModels ride the flow's one launch,
+        // keyed by screen id; each screen confirms it the first time the flow
+        // reaches it (verifyScreenTransitionIfNeeded). A referenced file's or
+        // case's own initialState is not applied — warned.
+        val plan = InitialStatePlan.plan(test) { file ->
+            runCatching { testLoader?.resolveFileReference(file) }.getOrNull()
         }
+        val payload = PreparedPayload.of(plan.fileLaunch)
+        relaunchReason(mocks = test.mocks != null, launch = test.launch != null, initialState = payload != null)?.let { reason ->
+            relaunchApp(reason, launchExtras(test.launch, payload?.text))
+        }
+        flowReceipts = payload?.let { p -> p.screens.keys.associateWith { p.launchId }.toMutableMap() } ?: mutableMapOf()
+        stateScreen = null
+        trackedScreen = null
+        val initialStateWarnings = plan.warnings.map { InitialStatePlan.message(it) }
+        initialStateWarnings.forEach { log("Warning: $it") }
 
         val results = mutableListOf<TestResult>()
         currentWarnings = mutableListOf()
@@ -654,7 +747,13 @@ class JsonUITestRunner(
                 saveHierarchyDump()
             }
             if (flowError == null || flowAttempts >= maxAttempts) {
+                flowWarnings.addAll(initialStateWarnings)
                 flowWarnings.addAll(currentWarnings)
+                // A screen in viewModels the flow never reached: its payload
+                // was never confirmed (spec §10.5).
+                flowReceipts.keys.forEach { screen ->
+                    flowWarnings.add("initialState.viewModels names '$screen', which the flow never reached: its values were never confirmed")
+                }
             } else {
                 log("  Flow failed — retry attempt ${flowAttempts + 1}/$maxAttempts")
             }
@@ -1125,16 +1224,30 @@ class JsonUITestRunner(
      * Implicit screen verification (canon: implicitVerification). Runs BEFORE
      * the step, because the step is meant to run ON that screen.
      */
+    /**
+     * Screens of the flow's initialState still to confirm, with the launch
+     * they were delivered in: removed as each one is reached and confirmed.
+     */
+    private var flowReceipts: MutableMap<String, String> = mutableMapOf()
+
     private fun verifyScreenTransitionIfNeeded(step: FlowTestStep) {
-        if (!config.verifyScreenTransitions) return
         val screen = step.screen ?: return
+        // `state` reads the screen the step names (else the last one named).
+        stateScreen = screen
         // Same screen as the last executed step: nothing has changed.
         if (screen == trackedScreen) return
 
-        assertionExecutor.execute(
-            TestStep(assert = "screen", name = screen, timeout = config.screenTransitionTimeout.toInt())
-        )
+        if (config.verifyScreenTransitions) {
+            assertionExecutor.execute(
+                TestStep(assert = "screen", name = screen, timeout = config.screenTransitionTimeout.toInt())
+            )
+        }
         trackedScreen = screen
+        // The first time the flow reaches a screen its initialState named,
+        // the screen confirms it (spec §10.5).
+        flowReceipts.remove(screen)?.let { launchId ->
+            StateBridge.awaitReceipt(screen, launchId, config.screenReadyTimeout)
+        }
     }
 
     private fun executeFlowStep(step: FlowTestStep, warnings: MutableList<String>) {
@@ -1185,6 +1298,12 @@ class JsonUITestRunner(
             ?: throw IllegalStateException("TestLoader not set for file reference resolution: ${step.file}")
 
         val testCases = loader.resolveFileReferenceCases(step)
+        // `state` inside a referenced case reads that file's own screen.
+        step.file?.let { file ->
+            runCatching { loader.resolveFileReference(file) }.getOrNull()?.let {
+                stateScreen = ScreenIdentity.screenId(it.source.layout)
+            }
+        }
 
         for (testCase in testCases) {
             // Skip if marked to skip

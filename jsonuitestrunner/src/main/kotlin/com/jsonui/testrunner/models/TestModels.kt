@@ -2,6 +2,7 @@ package com.jsonui.testrunner.models
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.json.JsonElement
 
 // MARK: - Screen Test
@@ -113,7 +114,12 @@ data class FlowTestSource(
 
 @Serializable
 data class FlowInitialState(
-    val screen: String? = null,
+    /**
+     * Screen id -> that screen's values, delivered in the flow's launch and
+     * confirmed when the flow first reaches the screen (spec §10.2, §10.5).
+     * `screen` is no longer part of the schema (validate:
+     * flow-initial-state-screen-removed); the loader ignores it.
+     */
     val viewModels: Map<String, Map<String, JsonElement>>? = null
 )
 
@@ -132,6 +138,8 @@ data class FlowTestStep(
     val timeout: Int? = null,
     val ms: Int? = null,
     val name: String? = null,
+    /** A written `null` is [kotlinx.serialization.json.JsonNull]; absent is null (see [KeepNullJsonElement]). */
+    @Serializable(with = KeepNullJsonElement::class)
     val equals: JsonElement? = null,
     val contains: String? = null,
     val path: String? = null,
@@ -203,6 +211,8 @@ data class TestStep(
     val timeout: Int? = null,
     val ms: Int? = null,
     val name: String? = null,
+    /** A written `null` is [kotlinx.serialization.json.JsonNull]; absent is null (see [KeepNullJsonElement]). */
+    @Serializable(with = KeepNullJsonElement::class)
     val equals: JsonElement? = null,
     val contains: String? = null,
     val path: String? = null,
@@ -373,4 +383,25 @@ data class TestSuiteResult(
     val passedCount: Int get() = results.count { it.passed }
     val failedCount: Int get() = results.count { !it.passed }
     val allPassed: Boolean get() = results.all { it.passed }
+}
+
+/**
+ * `equals: null` is a value — `state` compares against null (spec §10.4: a
+ * key holding null) — but kotlinx.serialization decodes a JSON null into a
+ * nullable property as Kotlin null, which reads as "no equals" ("state
+ * requires 'equals'"). This serializer is nullable itself, so it receives
+ * the null token and keeps it as [kotlinx.serialization.json.JsonNull]; an
+ * absent key still takes the property's default, null.
+ */
+object KeepNullJsonElement : kotlinx.serialization.KSerializer<JsonElement?> {
+    override val descriptor: kotlinx.serialization.descriptors.SerialDescriptor =
+        JsonElement.serializer().nullable.descriptor
+
+    override fun deserialize(decoder: kotlinx.serialization.encoding.Decoder): JsonElement? =
+        (decoder as kotlinx.serialization.json.JsonDecoder).decodeJsonElement()
+
+    override fun serialize(encoder: kotlinx.serialization.encoding.Encoder, value: JsonElement?) {
+        if (value == null) encoder.encodeNull()
+        else encoder.encodeSerializableValue(JsonElement.serializer(), value)
+    }
 }
