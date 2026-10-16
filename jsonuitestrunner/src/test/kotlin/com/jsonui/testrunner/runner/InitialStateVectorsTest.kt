@@ -90,6 +90,19 @@ class InitialStateVectorsTest {
         assertEquals(json.parseToJsonElement("""{"login":{"email":"a","n":null}}"""), root["screens"])
     }
 
+    /** A screen of viewModels the flow never reached: one warning each, the web driver's words. */
+    @Test
+    fun anUnreachedScreenOfTheFlowIsAWarning() {
+        assertEquals(
+            listOf(
+                "initialState for screen 'home' was never checked: the flow never reached it (no step names that screen)",
+                "initialState for screen 'cart' was never checked: the flow never reached it (no step names that screen)"
+            ),
+            InitialStatePlan.unreachedWarnings(listOf("home", "cart"))
+        )
+        assertEquals(emptyList<String>(), InitialStatePlan.unreachedWarnings(emptyList()))
+    }
+
     @Test
     fun screenIds() {
         assertEquals("ProductDetail", ScreenIdentity.screenId("Layouts/ProductDetail.json"))

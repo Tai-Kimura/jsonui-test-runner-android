@@ -749,10 +749,11 @@ class JsonUITestRunner(
             if (flowError == null || flowAttempts >= maxAttempts) {
                 flowWarnings.addAll(initialStateWarnings)
                 flowWarnings.addAll(currentWarnings)
-                // A screen in viewModels the flow never reached: its payload
-                // was never confirmed (spec §10.5).
-                flowReceipts.keys.forEach { screen ->
-                    flowWarnings.add("initialState.viewModels names '$screen', which the flow never reached: its values were never confirmed")
+                // A screen in viewModels the flow never reached was never
+                // checked (spec §10.5) — judged, as on web, once the steps
+                // have passed and before teardown.
+                if (flowError == null) {
+                    flowWarnings.addAll(InitialStatePlan.unreachedWarnings(flowReceipts.keys))
                 }
             } else {
                 log("  Flow failed — retry attempt ${flowAttempts + 1}/$maxAttempts")

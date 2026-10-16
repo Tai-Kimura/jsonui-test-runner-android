@@ -133,6 +133,17 @@ data class InitialStatePlan(
                 "(${warning.code}). Put the values in the flow's initialState.viewModels."
         }
 
+        /**
+         * Spec §10.5: a screen of the flow's viewModels the flow never reached
+         * was never checked — a warning per screen, worded as the web
+         * driver's. [unreached] is the screens still waiting for their
+         * receipt when the flow's steps have passed (before teardown).
+         */
+        fun unreachedWarnings(unreached: Collection<String>): List<String> = unreached.map { screenId ->
+            "initialState for screen '$screenId' was never checked: the flow never reached it " +
+                "(no step names that screen)"
+        }
+
         /** The message a case failure carries. */
         fun message(failure: CaseFailure): String =
             "case '${failure.caseName}' has its own initialState, which cannot be delivered under caseIsolation " +
