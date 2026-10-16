@@ -152,6 +152,27 @@ data class InitialStatePlan(
     }
 }
 
+/**
+ * A flow's screens still to confirm their initialState (spec §10.5), with the
+ * launch each was delivered in. A screen leaves only once its receipt has
+ * passed, so a retried flow body checks it again — the web driver's
+ * checkReceiptOnArrival.
+ */
+class FlowReceipts(pending: Map<String, String> = emptyMap()) {
+    private val pending = LinkedHashMap(pending)
+
+    /** The screens whose receipt has not passed yet. */
+    val unreached: Set<String> get() = pending.keys
+
+    /** On arrival at [screen]: wait for its receipt with [await], then stop waiting for it. */
+    fun checkOnArrival(screen: String, await: (screenId: String, launchId: String) -> Unit) {
+        val launchId = pending[screen] ?: return
+        await(screen, launchId)
+        // Only once it passed: a retried flow body checks it again.
+        pending.remove(screen)
+    }
+}
+
 /** The `JSONUI_TEST_INITIAL_STATE` value (spec §10.2). */
 object InitialStatePayload {
     const val EXTRA = "JSONUI_TEST_INITIAL_STATE"

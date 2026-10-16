@@ -103,6 +103,24 @@ class InitialStateVectorsTest {
         assertEquals(emptyList<String>(), InitialStatePlan.unreachedWarnings(emptyList()))
     }
 
+    /** A flow's screen leaves the pending set only once its receipt has passed: a retry checks it again. */
+    @Test
+    fun aFlowScreenStaysPendingUntilItsReceiptPasses() {
+        val receipts = FlowReceipts(mapOf("home" to "L1", "cart" to "L1"))
+        val awaited = mutableListOf<String>()
+        val failed = runCatching {
+            receipts.checkOnArrival("home") { screen, _ -> awaited += screen; throw InitialStateNotConfirmedException("no receipt") }
+        }.exceptionOrNull()
+        assertTrue(failed is InitialStateNotConfirmedException)
+        assertEquals("a failed receipt keeps the screen pending", setOf("home", "cart"), receipts.unreached)
+
+        receipts.checkOnArrival("home") { screen, launchId -> awaited += "$screen@$launchId" }
+        assertEquals(setOf("cart"), receipts.unreached)
+        receipts.checkOnArrival("home") { screen, _ -> awaited += "again:$screen" }
+        receipts.checkOnArrival("other") { screen, _ -> awaited += screen }
+        assertEquals(listOf("home", "home@L1"), awaited)
+    }
+
     @Test
     fun screenIds() {
         assertEquals("ProductDetail", ScreenIdentity.screenId("Layouts/ProductDetail.json"))

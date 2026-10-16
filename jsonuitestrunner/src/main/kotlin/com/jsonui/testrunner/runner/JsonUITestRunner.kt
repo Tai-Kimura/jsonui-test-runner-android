@@ -694,7 +694,7 @@ class JsonUITestRunner(
         relaunchReason(mocks = test.mocks != null, launch = test.launch != null, initialState = payload != null)?.let { reason ->
             relaunchApp(reason, launchExtras(test.launch, payload?.text))
         }
-        flowReceipts = payload?.let { p -> p.screens.keys.associateWith { p.launchId }.toMutableMap() } ?: mutableMapOf()
+        flowReceipts = FlowReceipts(payload?.let { p -> p.screens.keys.associateWith { p.launchId } }.orEmpty())
         stateScreen = null
         trackedScreen = null
         val initialStateWarnings = plan.warnings.map { InitialStatePlan.message(it) }
@@ -721,6 +721,9 @@ class JsonUITestRunner(
             flowAttempts++
             flowError = null
             currentWarnings = mutableListOf()
+            // A retried body starts unverified: its first screen is checked
+            // again, its pending receipt included.
+            trackedScreen = null
             startCaseRecording(test.metadata.name, "flow")
 
             try {
@@ -753,7 +756,7 @@ class JsonUITestRunner(
                 // checked (spec §10.5) — judged, as on web, once the steps
                 // have passed and before teardown.
                 if (flowError == null) {
-                    flowWarnings.addAll(InitialStatePlan.unreachedWarnings(flowReceipts.keys))
+                    flowWarnings.addAll(InitialStatePlan.unreachedWarnings(flowReceipts.unreached))
                 }
             } else {
                 log("  Flow failed — retry attempt ${flowAttempts + 1}/$maxAttempts")
@@ -1229,7 +1232,7 @@ class JsonUITestRunner(
      * Screens of the flow's initialState still to confirm, with the launch
      * they were delivered in: removed as each one is reached and confirmed.
      */
-    private var flowReceipts: MutableMap<String, String> = mutableMapOf()
+    private var flowReceipts = FlowReceipts()
 
     private fun verifyScreenTransitionIfNeeded(step: FlowTestStep) {
         val screen = step.screen ?: return
@@ -1245,9 +1248,9 @@ class JsonUITestRunner(
         }
         trackedScreen = screen
         // The first time the flow reaches a screen its initialState named,
-        // the screen confirms it (spec §10.5).
-        flowReceipts.remove(screen)?.let { launchId ->
-            StateBridge.awaitReceipt(screen, launchId, config.screenReadyTimeout)
+        // the screen confirms it (spec §10.5); it stays pending until it has.
+        flowReceipts.checkOnArrival(screen) { screenId, launchId ->
+            StateBridge.awaitReceipt(screenId, launchId, config.screenReadyTimeout)
         }
     }
 
