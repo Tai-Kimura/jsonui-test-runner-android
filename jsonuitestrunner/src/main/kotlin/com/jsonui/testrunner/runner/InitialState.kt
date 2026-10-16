@@ -185,16 +185,40 @@ class FlowReceipts(pending: Map<String, String> = emptyMap()) {
 class FlowScreens {
     var tracked: String? = null
         private set
-    var state: String? = null
+
+    /** The last screen a flow step named (or a screen test's / a host's screen). */
+    private var named: String? = null
+
+    /** While a referenced file's case runs, `state` reads that file's screen. */
+    private var referenced: String? = null
+
+    /** The screen `state` reads now; setting it names it (a screen test, a host). */
+    var state: String?
+        get() = referenced ?: named
+        set(value) {
+            referenced = null
+            named = value
+        }
 
     fun startAttempt() {
         tracked = null
-        state = null
+        named = null
+        referenced = null
     }
 
-    /** A screen tracked by something other than a step (a file reference resets it). */
-    fun forget() {
+    /**
+     * A file reference runs cases of another file: the screen is unknown
+     * afterwards, and `state` reads that file's screen ([screenOfFile])
+     * meanwhile.
+     */
+    fun enterFileReference(screenOfFile: String?) {
         tracked = null
+        referenced = screenOfFile
+    }
+
+    /** After the file reference: `state` reads the flow's last named screen again (as iOS 914a48d). */
+    fun leaveFileReference() {
+        referenced = null
     }
 
     /**
@@ -202,7 +226,8 @@ class FlowScreens {
      * not the screen already verified, [verify] it, then check its receipt.
      */
     fun arrive(screen: String, receipts: FlowReceipts, verify: (String) -> Unit, await: (String, String) -> Unit) {
-        state = screen
+        referenced = null
+        named = screen
         if (screen == tracked) return
         verify(screen)
         tracked = screen

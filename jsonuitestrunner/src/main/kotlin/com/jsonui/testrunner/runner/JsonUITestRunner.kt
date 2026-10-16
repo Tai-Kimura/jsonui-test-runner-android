@@ -1266,7 +1266,6 @@ class JsonUITestRunner(
             // A file reference carries no screen of its own, and the case it
             // runs may end anywhere — reset to unknown so the next inline
             // step is verified rather than trusted.
-            flowScreens.forget()
             executeFileReferenceStep(step, warnings)
             return
         }
@@ -1300,13 +1299,22 @@ class JsonUITestRunner(
             ?: throw IllegalStateException("TestLoader not set for file reference resolution: ${step.file}")
 
         val testCases = loader.resolveFileReferenceCases(step)
-        // `state` inside a referenced case reads that file's own screen.
-        step.file?.let { file ->
-            runCatching { loader.resolveFileReference(file) }.getOrNull()?.let {
-                stateScreen = ScreenIdentity.screenId(it.source.layout)
-            }
+        // A file reference carries no screen of its own, and the case it runs
+        // may end anywhere: the next inline step is verified rather than
+        // trusted. `state` inside a referenced case reads that file's own
+        // screen, and the flow's last named screen again afterwards.
+        val fileScreen = step.file?.let { file ->
+            runCatching { loader.resolveFileReference(file) }.getOrNull()?.let { ScreenIdentity.screenId(it.source.layout) }
         }
+        flowScreens.enterFileReference(fileScreen)
+        try {
+            runReferencedCases(testCases, warnings)
+        } finally {
+            flowScreens.leaveFileReference()
+        }
+    }
 
+    private fun runReferencedCases(testCases: List<TestCase>, warnings: MutableList<String>) {
         for (testCase in testCases) {
             // Skip if marked to skip
             if (testCase.skip == true) {

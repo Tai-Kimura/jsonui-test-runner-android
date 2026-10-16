@@ -150,6 +150,25 @@ class InitialStateVectorsTest {
         assertEquals("home", screens.state)
     }
 
+    /**
+     * A referenced file's case reads that file's screen; afterwards `state`
+     * reads the flow's last named screen again (iOS 914a48d), and the next
+     * step on that screen is verified again (the reference may end anywhere).
+     */
+    @Test
+    fun afterAReferencedCaseStateReadsTheFlowsScreenAgain() {
+        val screens = FlowScreens()
+        val verified = mutableListOf<String>()
+        screens.startAttempt()
+        screens.arrive("cart", FlowReceipts(), verify = { verified += it }, await = { _, _ -> })
+        screens.enterFileReference("login")
+        assertEquals("login", screens.state)
+        screens.leaveFileReference()
+        assertEquals("cart", screens.state)
+        screens.arrive("cart", FlowReceipts(), verify = { verified += it }, await = { _, _ -> })
+        assertEquals(listOf("cart", "cart"), verified)
+    }
+
     @Test
     fun screenIds() {
         assertEquals("ProductDetail", ScreenIdentity.screenId("Layouts/ProductDetail.json"))
