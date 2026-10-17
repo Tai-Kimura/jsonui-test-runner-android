@@ -21,7 +21,7 @@ import android.graphics.Point
  * 2026-10-18 on Views ScrollViews (20 strokes per travel and direction):
  * on the conf_ci AVD (2560x1600, 320dpi, API 35) the repeated-point hold
  * left a tail in 120 of 120 strokes in one run and 113 of 120 in another,
- * a 480px travel moving up to 729px, and the same with the hold injected
+ * a 480px travel moving up to 760px, and the same with the hold injected
  * for 400ms; on a 1080x2400 phone AVD (420dpi) 118 of 120; on CI's x86_64
  * tablet emulator 3 of 14. With the hold moving 1px each time: 0 of 120 on
  * both AVDs, 463 / -465px for 480px every time. From 1.15.5 (09c348e) the

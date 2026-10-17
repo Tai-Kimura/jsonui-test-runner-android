@@ -191,6 +191,63 @@ class FormFooterOnDeviceTest {
         return y
     }
 
+    /**
+     * The offset that puts error_label's top [k]px below the viewport's
+     * bottom edge (k < 0: that many px of it on screen), from the laid-out
+     * column and the scroll view's own padding.
+     */
+    private fun offsetPuttingErrorLabelBelowTheEdgeBy(k: Int): Int {
+        var y = -1
+        instrumentation.runOnMainSync {
+            val sv = FormFooterProbeActivity.scrollView!!
+            val column = sv.getChildAt(0) as android.view.ViewGroup
+            val viewport = sv.height - sv.paddingTop - sv.paddingBottom
+            y = column.top + column.getChildAt(FormFooterProbeActivity.ROWS_ABOVE + 2).top - viewport - k
+        }
+        return y
+    }
+
+    /** error_label's top relative to the viewport's bottom edge, as drawn (negative: on screen). */
+    private fun errorLabelBelowTheEdge(): Int {
+        var d = Int.MIN_VALUE
+        instrumentation.runOnMainSync {
+            val sv = FormFooterProbeActivity.scrollView!!
+            val column = sv.getChildAt(0) as android.view.ViewGroup
+            val label = IntArray(2).also { column.getChildAt(FormFooterProbeActivity.ROWS_ABOVE + 2).getLocationOnScreen(it) }
+            val scroll = IntArray(2).also { sv.getLocationOnScreen(it) }
+            d = label[1] - (scroll[1] + sv.height - sv.paddingBottom)
+        }
+        return d
+    }
+
+    /**
+     * The other side of the contract the hidden-item arm stands on: `visible`
+     * passes when any part of the element — 1px — is on screen, and fails
+     * when none is (schemas/actions.schema.json). error_label is placed with
+     * scrollTo alone, no scrollUntilVisible, its top k px below the viewport's
+     * bottom edge: k = -1 (1px on screen) passes, k = 0 and k = +1 fail.
+     */
+    @Test
+    fun visibleAnswersByWhetherAnyPixelIsOnScreen() {
+        launch()
+        val wrong = mutableListOf<String>()
+        for ((k, expected) in listOf(-1 to true, 0 to false, 1 to false)) {
+            val y = offsetPuttingErrorLabelBelowTheEdgeBy(k)
+            assertTrue("k=$k: offset $y is outside 0..${maxScroll()}", y in 0..maxScroll())
+            scrollTo(y)
+            val drawn = errorLabelBelowTheEdge()
+            assertTrue("k=$k: error_label drawn ${drawn}px below the edge, not ${k}px", drawn == k)
+            val failure = runCatching {
+                AssertionExecutor(device, 3000).execute(
+                    TestStep(assert = "visible", id = FormFooterProbeActivity.BELOW_ID, timeout = 1500))
+            }.exceptionOrNull()
+            val passed = failure == null
+            println("[FormFooterEdge] k=$k scrollY=${scrollY()} drawn=$drawn visible ${if (passed) "passed" else "failed"}")
+            if (passed != expected) wrong += "k=$k: visible ${if (passed) "passed" else "failed"}, the contract says it ${if (expected) "passes" else "fails"}"
+        }
+        assertTrue(wrong.joinToString("; "), wrong.isEmpty())
+    }
+
     @Test
     fun aHiddenFollowingItemIsNamedAsOffscreen() {
         launch()
