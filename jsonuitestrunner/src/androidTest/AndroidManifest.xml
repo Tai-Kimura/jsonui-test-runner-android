@@ -32,6 +32,12 @@
         <activity
             android:name="com.jsonui.testrunner.actions.ScreenshotFrameProbeActivity"
             android:exported="false" />
+        <!-- SlipAtEndProbeActivity: a ScrollView that settles back a few px when
+             a finger lifts at its end, started explicitly by
+             UnstickAtEndOnDeviceTest; not a launcher target. -->
+        <activity
+            android:name="com.jsonui.testrunner.actions.SlipAtEndProbeActivity"
+            android:exported="false" />
         <activity
             android:name="com.jsonui.testrunner.runner.LaunchProbeActivity"
             android:exported="true">

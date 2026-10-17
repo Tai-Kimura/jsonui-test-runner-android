@@ -316,12 +316,16 @@ class ScrollUntilVisibleWiringTest {
     @Test
     fun `a target the rule lost is reported after the last motion has settled`() {
         val body = codeOnly(bodyOf("unstickFromTrailingEdge"))
-        val seq = sequenceOf(body, listOf("awaitTargetSettled(", "boundsOf(id) == null", "warningHandler"))
+        val seq = sequenceOf(body, listOf("awaitTargetSettled(", "boundsOf(id) == null", "reapproachAfterLoss(", "warningHandler"))
         // Two settles (after the drag, after the rollback), THEN the re-read,
-        // THEN the report. A re-read before the rollback's settle would read
-        // a moving target — the very defect 1.15.0 fixed for the guard.
+        // a re-approach for a target the motions sent out (2026-10-18: a
+        // rollback over a 4px slip pushed it off the bottom and the step
+        // returned success), THEN the re-read that decides the report. A
+        // re-read before the rollback's settle would read a moving target —
+        // the very defect 1.15.0 fixed for the guard.
         assertEquals(
-            listOf("awaitTargetSettled(", "awaitTargetSettled(", "boundsOf(id) == null", "warningHandler"),
+            listOf("awaitTargetSettled(", "awaitTargetSettled(", "boundsOf(id) == null", "reapproachAfterLoss(",
+                "boundsOf(id) == null", "warningHandler"),
             seq.filter { it != "warningHandler" || seq.indexOf(it) >= 0 }.let { s ->
                 // keep only the tail from the first settle on; the outside
                 // warning precedes the motions and is another arm's subject
@@ -721,6 +725,7 @@ class ScrollUntilVisibleWiringTest {
             .replace("\${surface.height()}", "2400")
             .replace("\${after?.bottom}", "2295")
             .replace("\$step", "288").replace("\$keep", "true")
+            .replace("\$slop", "21").replace("\$rollback", "0")
             .replace("\$id", "save_button").replace("\$via", "entry")
         assertFalse(
             "placeholders survived substitution — the arm is checking Kotlin, " +

@@ -109,6 +109,50 @@ class ViewportMarginTest {
         assertEquals(120, ViewportMargin.clearanceFor(1080, 1000))
     }
 
+    /**
+     * Measured 2026-10-18 on a consumer phone (1080x2400, 420dpi: touch slop
+     * 8dp = 21px), driver 1.17.2: a target at the END of its container,
+     * flush within the clearance (129). The drag (293px; 329px on the second
+     * screen) could not scroll it, and the content settled back 4px. Kept:
+     * reversing the drag over that slip pushed the target off the screen.
+     */
+    @Test
+    fun `a slip of less than a touch slop at the end of a container is kept`() {
+        assertTrue(ViewportMargin.keepScrolledPosition(
+            before = 2054, after = 2058, surfaceBottom = 2148, touchSlop = 21))
+        assertTrue(ViewportMargin.keepScrolledPosition(
+            before = 2065, after = 2069, surfaceBottom = 2123, touchSlop = 21))
+        // The same readings under the old rule (no slop) were rolled back.
+        assertFalse(ViewportMargin.keepScrolledPosition(
+            before = 2054, after = 2058, surfaceBottom = 2148))
+    }
+
+    @Test
+    fun `the slop is the boundary - one less is kept, the slop and one more are not`() {
+        val slop = 21
+        assertTrue(ViewportMargin.keepScrolledPosition(2054, 2054 + slop - 1, 2148, slop))
+        assertFalse(ViewportMargin.keepScrolledPosition(2054, 2054 + slop, 2148, slop))
+        assertFalse(ViewportMargin.keepScrolledPosition(2054, 2054 + slop + 1, 2148, slop))
+    }
+
+    /**
+     * The rollback undoes what the target did: a visible target that slipped
+     * down is moved back UP (negative travel) by the slip plus the slop a
+     * drag spends before it scrolls — never the drag reversed, which would
+     * send it further down (293px down for a 4px slip). Only a target the
+     * drag took out of view gets the drag reversed.
+     */
+    @Test
+    fun `the rollback moves a slipped target back up by its slip, and reverses the drag only for a lost one`() {
+        val slop = 21
+        assertEquals(-(slop + slop), ViewportMargin.rollbackTravel(2054, 2054 + slop, step = 293, touchSlop = slop))
+        assertEquals(-(slop + 1 + slop), ViewportMargin.rollbackTravel(2054, 2054 + slop + 1, step = 293, touchSlop = slop))
+        assertEquals(293, ViewportMargin.rollbackTravel(2054, null, step = 293, touchSlop = slop))
+        assertEquals(329, ViewportMargin.rollbackTravel(2065, null, step = 329, touchSlop = slop))
+        assertEquals("a target that did not slip is not moved", 0,
+            ViewportMargin.rollbackTravel(2054, 2050, step = 293, touchSlop = slop))
+    }
+
     @Test
     fun `a scroll that changed nothing is kept rather than undone`() {
         // Equal is kept: reverting a no-op would spend a second swipe to

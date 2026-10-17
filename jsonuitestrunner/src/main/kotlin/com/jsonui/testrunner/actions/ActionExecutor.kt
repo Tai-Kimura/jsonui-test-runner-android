@@ -1013,6 +1013,10 @@ class ActionExecutor(
         device.swipe(line.startX, line.startY, line.endX, line.endY, 20)
     }
 
+    /** The device's touch slop: a drag moves content only beyond it. */
+    private fun touchSlop(): Int =
+        android.view.ViewConfiguration.get(InstrumentationRegistry.getInstrumentation().context).scaledTouchSlop
+
     private fun gestureSafeX(x: Int): Int =
         clampToGestureSafeX(x, device.displayWidth, gestureEdgeInsetPx())
 
@@ -1564,14 +1568,22 @@ class ActionExecutor(
         //       tap. 1 failure in 5 identical runs.
         awaitTargetSettled(id, TargetSettle.AFTER_UNSTICK)
         val after = boundsOf(id)
+        val slop = touchSlop()
         val keep = ViewportMargin.keepScrolledPosition(
-            before.bottom, after?.bottom, surface.bottom)
+            before.bottom, after?.bottom, surface.bottom, slop)
+        var rollback = 0
         if (!keep) {
-            device.swipe(UnstickMotion.path(cx, cy - step / 2, cy + step / 2), UnstickMotion.STEPS)
-            // The rollback is the same drag backwards — precise, so it puts
-            // the target back where the search FOUND it (a fling did not) —
-            // and it is then the last motion of the step, so (b) above
-            // applies to this branch unchanged.
+            // The rollback undoes what the target DID (ViewportMargin.
+            // rollbackTravel): a target the drag took out of view gets the
+            // drag reversed; a visible one that slipped down is moved back up
+            // by the slip. Reversing the whole drag over a 4px slip at the end
+            // of a container pushed the target off the screen (2026-10-18,
+            // driver 1.17.2). It is then the last motion of the step, so (b)
+            // above applies to this branch unchanged.
+            rollback = ViewportMargin.rollbackTravel(before.bottom, after?.bottom, step, slop)
+            if (rollback != 0) {
+                device.swipe(UnstickMotion.path(cx, cy - rollback / 2, cy + rollback / 2), UnstickMotion.STEPS)
+            }
             awaitTargetSettled(id, TargetSettle.AFTER_REVERT)
         }
         // 🚨 THE STEP'S PROMISE IS VISIBILITY, AND THIS IS WHERE IT IS CHECKED.
@@ -1588,10 +1600,14 @@ class ActionExecutor(
         // here would redden it for a loss the following step repairs. The
         // line carries every number the guard ruled on, so the next report
         // of this shape arrives with the mechanism measured rather than read.
+        // One re-approach before giving up: the motions above can only have
+        // sent the target out through the bottom (the drag moves it up; a
+        // rollback or a slip moves it down), so the way back is up.
+        if (boundsOf(id) == null) reapproachAfterLoss(id, surface, "up")
         if (boundsOf(id) == null) {
             val line = "WARN [scrollUntilVisible] '$id' was found and then lost by the " +
                 "edge-clearance motion: it is no longer visible after " +
-                (if (keep) "a drag of ${step}px" else "a drag of ${step}px and its rollback") +
+                (if (keep) "a drag of ${step}px" else "a drag of ${step}px and a rollback of ${rollback}px") +
                 " (was flush at ${before.bottom} of ${surface.bottom}, after=${after?.bottom}). " +
                 "The step returns without it on screen; the next step will not see it."
             warningHandler?.invoke(line)
@@ -1729,7 +1745,8 @@ class ActionExecutor(
             "${surface.bottom}, clearance=" +
             "${ViewportMargin.clearanceFor(surface.height(), surface.width())}, " +
             "after=${after?.bottom}, kept=$keep, " +
-            "surface=${surface.width()}x${surface.height()}, step=$step")
+            "surface=${surface.width()}x${surface.height()}, step=$step, " +
+            "slop=$slop, rollback=$rollback")
     }
 
     /**
