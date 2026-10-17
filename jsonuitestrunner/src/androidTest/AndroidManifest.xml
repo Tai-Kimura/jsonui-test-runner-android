@@ -38,6 +38,12 @@
         <activity
             android:name="com.jsonui.testrunner.actions.SlipAtEndProbeActivity"
             android:exported="false" />
+        <!-- OvershootProbeActivity: a ScrollView that carries one armed upward
+             drag on, started explicitly by ReapproachAfterOvershootOnDeviceTest;
+             not a launcher target. -->
+        <activity
+            android:name="com.jsonui.testrunner.actions.OvershootProbeActivity"
+            android:exported="false" />
         <activity
             android:name="com.jsonui.testrunner.runner.LaunchProbeActivity"
             android:exported="true">

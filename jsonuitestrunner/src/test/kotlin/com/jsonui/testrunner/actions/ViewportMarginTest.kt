@@ -153,6 +153,25 @@ class ViewportMarginTest {
             ViewportMargin.rollbackTravel(2054, 2050, step = 293, touchSlop = slop))
     }
 
+    /**
+     * The re-approach searches the way the target left, read from the motion
+     * that lost it (ticket test-android-reapproach-after-loss-always-searches-up):
+     * lost by the drag (it moved the content up) or by an upward rollback →
+     * through the top → "down"; lost after a downward rollback, or not known
+     * → through the bottom → "up".
+     */
+    @Test
+    fun `the re-approach searches the way the target left`() {
+        assertEquals("lost by the drag: out through the top", "down",
+            ViewportMargin.reapproachDirection(lostByDrag = true, rollback = 293))
+        assertEquals("lost by an upward rollback: out through the top", "down",
+            ViewportMargin.reapproachDirection(lostByDrag = false, rollback = -43))
+        assertEquals("lost after a downward rollback: out through the bottom", "up",
+            ViewportMargin.reapproachDirection(lostByDrag = false, rollback = 293))
+        assertEquals("nothing known: the bottom, as before", "up",
+            ViewportMargin.reapproachDirection(lostByDrag = false, rollback = 0))
+    }
+
     @Test
     fun `a scroll that changed nothing is kept rather than undone`() {
         // Equal is kept: reverting a no-op would spend a second swipe to

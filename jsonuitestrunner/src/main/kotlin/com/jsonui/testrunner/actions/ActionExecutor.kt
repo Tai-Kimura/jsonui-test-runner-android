@@ -1600,10 +1600,13 @@ class ActionExecutor(
         // here would redden it for a loss the following step repairs. The
         // line carries every number the guard ruled on, so the next report
         // of this shape arrives with the mechanism measured rather than read.
-        // One re-approach before giving up: the motions above can only have
-        // sent the target out through the bottom (the drag moves it up; a
-        // rollback or a slip moves it down), so the way back is up.
-        if (boundsOf(id) == null) reapproachAfterLoss(id, surface, "up")
+        // One re-approach before giving up, the way the target left
+        // (ViewportMargin.reapproachDirection): a drag that took it out of
+        // view overshot through the top; a downward rollback or a slip
+        // sends it out through the bottom.
+        if (boundsOf(id) == null) {
+            reapproachAfterLoss(id, surface, ViewportMargin.reapproachDirection(after == null, rollback))
+        }
         if (boundsOf(id) == null) {
             val line = "WARN [scrollUntilVisible] '$id' was found and then lost by the " +
                 "edge-clearance motion: it is no longer visible after " +
