@@ -16,14 +16,16 @@ import android.graphics.Point
  * (ScrollProbe, in-process scrollY): see [ViewportMargin.unstickTravel].
  *
  * The hold alternates 1px around the end point (ending on it) instead of
- * repeating it: moves at an unchanged position never reach the velocity
- * tracker, so a hold of repeated points was no hold — the release velocity
- * was the travel's, and the drag flung. Measured 2026-10-18 on the conf_ci
- * AVD (2560x1600, 320dpi, API 35, Views ScrollView): a 480px travel moved
- * 665–748px with a ~400ms tail whether the repeated-point hold lasted 80ms
- * (UiDevice.swipe) or 400ms (injected), and 463–465px with no tail when the
- * hold moved 1px each time (9 of 9 each way). From 1.15.5 (09c348e) the
- * device arm was red there in 3 of 3 runs.
+ * repeating it. A hold of repeated points mostly left velocity at release
+ * and the drag flung — how it survives the hold was not measured. Measured
+ * 2026-10-18 on Views ScrollViews (20 strokes per travel and direction):
+ * on the conf_ci AVD (2560x1600, 320dpi, API 35) the repeated-point hold
+ * left a tail in 120 of 120 strokes in one run and 113 of 120 in another,
+ * a 480px travel moving up to 729px, and the same with the hold injected
+ * for 400ms; on a 1080x2400 phone AVD (420dpi) 118 of 120; on CI's x86_64
+ * tablet emulator 3 of 14. With the hold moving 1px each time: 0 of 120 on
+ * both AVDs, 463 / -465px for 480px every time. From 1.15.5 (09c348e) the
+ * device arm was red on conf_ci in 3 of 3 runs.
  *
  * Not `UiDevice.drag`: that begins with a long-press hold, which on a row
  * with a long-click handler is an action, not a scroll.
