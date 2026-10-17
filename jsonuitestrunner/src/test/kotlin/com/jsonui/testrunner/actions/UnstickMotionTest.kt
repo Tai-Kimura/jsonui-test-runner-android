@@ -22,7 +22,20 @@ class UnstickMotionTest {
         val ys = UnstickMotion.segmentYs(1300, 1042)
         assertEquals(1 + UnstickMotion.HOLD_SEGMENTS, ys.size)
         assertEquals(1300, ys.first())
-        ys.drop(1).forEach { assertEquals("held on the end point", 1042, it) }
+        assertEquals("the finger lifts on the end point", 1042, ys.last())
+        ys.drop(1).forEach { assertTrue("held within 1px of the end point: $it", it in 1042..1043) }
+    }
+
+    /**
+     * A hold of repeated points mostly released with velocity left — a fling
+     * (conf_ci AVD, 2026-10-18: a tail in 113–120 of 120 strokes, a 480px
+     * travel moving up to 729px; with 1px moves, 0 of 120). Every hold point
+     * differs from the one before it.
+     */
+    @Test
+    fun `no two consecutive points of the hold are the same`() {
+        val ys = UnstickMotion.segmentYs(1300, 1042)
+        ys.toList().zipWithNext().forEach { (a, b) -> assertTrue("repeated point $a", a != b) }
     }
 
     @Test
