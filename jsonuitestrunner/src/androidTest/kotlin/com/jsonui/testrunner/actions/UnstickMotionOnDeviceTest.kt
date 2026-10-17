@@ -5,6 +5,7 @@ import android.graphics.Rect
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -88,15 +89,17 @@ class UnstickMotionOnDeviceTest {
         return last to (stableSince - t0)
     }
 
-    /** Runs [gesture] from a mid-content offset; returns px moved (signed). */
-    private fun moved(label: String, gesture: () -> Unit): Int {
+    /** Runs [gesture] from a mid-content offset; returns (px moved, signed; ms it kept moving after the gesture). */
+    private fun stroke(label: String, gesture: () -> Unit): Pair<Int, Long> {
         setScrollY(START)
         val before = scrollY()
         gesture()
         val (after, ms) = rest()
         println("[UnstickMotion] $label: before=$before after=$after moved=${after - before}px rest=${ms}ms")
-        return after - before
+        return (after - before) to ms
     }
+
+    private fun moved(label: String, gesture: () -> Unit): Int = stroke(label, gesture).first
 
     @Test
     fun theShippedDragIsBoundedAndItsRollbackCancelsIt() {
@@ -122,6 +125,35 @@ class UnstickMotionOnDeviceTest {
                 assertTrue("net ${fwd + back} for travel $travel", kotlin.math.abs(fwd + back) <= clearance / 4)
             }
         }
+    }
+
+    /**
+     * The property the hold is for, read directly: once the finger lifts,
+     * the content does not move on. A ratio bound alone (the arm above)
+     * passed many tailed strokes — 2026-10-18, a repeated-point hold left a
+     * tail in 231 of 240 strokes on two AVDs while most stayed inside 4/3 —
+     * so whether it caught the defect was left to chance. Every stroke of
+     * every travel, both ways: no movement after the gesture returned
+     * (`rest` polls scrollY every 50ms until it holds for 300ms).
+     */
+    @Test
+    fun theShippedDragDoesNotMoveOnAfterTheFingerLifts() {
+        val surface = launch()
+        val cx = surface.centerX(); val cy = surface.centerY()
+        val clearance = ViewportMargin.clearanceFor(surface.height(), surface.width())
+        val tailed = mutableListOf<String>()
+        repeat(3) { i ->
+            for (travel in listOf(clearance, 2 * clearance, 3 * clearance)) {
+                for ((label, from, to) in listOf(Triple("forward", cy + travel / 2, cy - travel / 2),
+                                                  Triple("rollback", cy - travel / 2, cy + travel / 2))) {
+                    val (px, ms) = stroke("$label travel=$travel #$i (tail)") {
+                        device.swipe(UnstickMotion.path(cx, from, to), UnstickMotion.STEPS)
+                    }
+                    if (ms > 0) tailed += "$label travel=$travel #$i: moved ${px}px, still moving ${ms}ms after the gesture"
+                }
+            }
+        }
+        assertEquals("strokes that moved on after the finger lifted", emptyList<String>(), tailed)
     }
 
     private companion object {

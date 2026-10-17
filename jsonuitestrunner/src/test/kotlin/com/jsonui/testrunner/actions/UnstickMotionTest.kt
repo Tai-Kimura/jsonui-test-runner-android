@@ -29,7 +29,7 @@ class UnstickMotionTest {
     /**
      * A hold of repeated points mostly released with velocity left — a fling
      * (conf_ci AVD, 2026-10-18: a tail in 113–120 of 120 strokes, a 480px
-     * travel moving up to 729px; with 1px moves, 0 of 120). Every hold point
+     * travel moving up to 760px; with 1px moves, 0 of 120). Every hold point
      * differs from the one before it.
      */
     @Test
