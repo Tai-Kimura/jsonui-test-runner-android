@@ -1561,8 +1561,14 @@ class JsonUITestRunner(
                 artifactsRoot(), currentTestName, currentCaseName, name
             )
             file.parentFile?.mkdirs()
-            device.takeScreenshot(file)
-            log("Screenshot saved: ${file.absolutePath}")
+            // Once the display has caught up with the tree the steps waited on
+            // (StableScreenshot): a capture right after them can be the frame before.
+            val outcome = StableScreenshot.capture(device, file)
+            if (outcome == null) {
+                log("Failed to take screenshot: $name")
+                return
+            }
+            log("Screenshot saved: ${file.absolutePath} (${outcome.captures} capture(s)${if (outcome.stable) "" else ", never settled"})")
         } catch (e: Exception) {
             log("Failed to take screenshot: ${e.message}")
         }

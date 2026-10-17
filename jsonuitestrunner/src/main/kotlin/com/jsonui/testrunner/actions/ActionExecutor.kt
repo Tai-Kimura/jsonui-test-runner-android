@@ -20,6 +20,7 @@ import com.jsonui.testrunner.runner.AppWindow
 import com.jsonui.testrunner.runner.Deadline
 import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.ScrollHistory
+import com.jsonui.testrunner.runner.StableScreenshot
 import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
 import com.jsonui.testrunner.runner.ZeroSizeNodes
@@ -410,7 +411,7 @@ class ActionExecutor(
 
         // Default: save a PNG like the iOS / web drivers do
         val dir = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
-        device.takeScreenshot(File(dir, "$name.png"))
+        StableScreenshot.capture(device, File(dir, "$name.png"))
     }
 
     private fun executeAlertTap(step: TestStep, timeout: Long) {

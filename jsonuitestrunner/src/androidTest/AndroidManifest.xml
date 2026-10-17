@@ -27,6 +27,11 @@
         <activity
             android:name="com.jsonui.testrunner.actions.SwipeEdgeProbeActivity"
             android:exported="false" />
+        <!-- ScreenshotFrameProbeActivity: a surface whose colour flips on tap,
+             started explicitly by ScreenshotFrameOnDeviceTest; not a launcher target. -->
+        <activity
+            android:name="com.jsonui.testrunner.actions.ScreenshotFrameProbeActivity"
+            android:exported="false" />
         <activity
             android:name="com.jsonui.testrunner.runner.LaunchProbeActivity"
             android:exported="true">
