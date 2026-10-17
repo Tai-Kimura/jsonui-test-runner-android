@@ -109,9 +109,30 @@ class FormFooterOnDeviceTest {
      * the target failed (0 settle samples, then 8 re-approach drags the wrong
      * way). Mutation: accepting an invisible node again turns this red.
      */
+    /**
+     * The largest offset that still leaves age_field wholly below the
+     * viewport, from the laid-out column. The second start is half of it, not
+     * half the maximum offset: on a 1080x2400 phone AVD (420dpi; 2026-10-18)
+     * half the maximum (472) already showed age_field, and the arm's own
+     * precondition failed 2 of 2 runs before scrollUntilVisible was called.
+     */
+    private fun lastOffsetWithTheTargetBelow(): Int {
+        var y = -1
+        instrumentation.runOnMainSync {
+            val sv = FormFooterProbeActivity.scrollView!!
+            val column = sv.getChildAt(0) as android.view.ViewGroup
+            val viewport = sv.height - sv.paddingTop - sv.paddingBottom
+            y = column.getChildAt(FormFooterProbeActivity.ROWS_ABOVE).top - viewport - 1
+        }
+        return y
+    }
+
     @Test
     fun scrollUntilVisibleReachesATargetBelowTheViewport() {
-        for (start in listOf(0, maxScrollAfterLaunch() / 2)) {
+        launch()
+        val last = lastOffsetWithTheTargetBelow()
+        assertTrue("the probe cannot start above age_field here: last offset $last", last >= 2)
+        for (start in listOf(0, last / 2)) {
             launch()
             scrollTo(start)
             assertTrue("start=$start: age_field must begin off-screen",
@@ -133,12 +154,50 @@ class FormFooterOnDeviceTest {
      * container). Mutation: render without the container and presence turns
      * this red.
      */
+    /**
+     * Stages the arm on this device's geometry, from the driver's own rules:
+     * the row between age_field and error_label is made taller than
+     * scrollUntilVisible's clearance (ViewportMargin.clearanceFor of the
+     * scroll surface) by half a row, then the offset is the one that puts
+     * error_label's top exactly on the viewport's bottom edge. So error_label
+     * is just hidden and age_field sits more than the clearance above the
+     * edge — the step stops on arrival without its corrective drag.
+     *
+     * Not fixed: 860 was measured where rows (64dp) were taller than the
+     * clearance and the maximum offset was 1040. On the conf_ci AVD
+     * (2560x1600 landscape, 320dpi; 2026-10-18) the clearance is 160px and a
+     * row 128px, so no offset hid error_label while keeping age_field clear
+     * of it: 860 left error_label's top 36px on screen (`visible` rightly
+     * passed, 5 of 5 runs red), and the offset that hid it put age_field
+     * inside the clearance, so the step dragged on and revealed it.
+     */
+    private fun stageHiddenErrorLabel(): Int {
+        var y = -1
+        instrumentation.runOnMainSync {
+            val sv = FormFooterProbeActivity.scrollView!!
+            val surface = Rect().also { sv.getGlobalVisibleRect(it) }
+            val clearance = ViewportMargin.clearanceFor(surface.height(), surface.width())
+            val column = sv.getChildAt(0) as android.view.ViewGroup
+            val gap = column.getChildAt(FormFooterProbeActivity.ROWS_ABOVE + 1)
+            gap.layoutParams = gap.layoutParams.apply { height = clearance + column.getChildAt(0).height / 2 }
+        }
+        instrumentation.waitForIdleSync()
+        instrumentation.runOnMainSync {
+            val sv = FormFooterProbeActivity.scrollView!!
+            val column = sv.getChildAt(0) as android.view.ViewGroup
+            val viewport = sv.height - sv.paddingTop - sv.paddingBottom
+            y = column.getChildAt(FormFooterProbeActivity.ROWS_ABOVE + 2).top - viewport
+        }
+        return y
+    }
+
     @Test
     fun aHiddenFollowingItemIsNamedAsOffscreen() {
         launch()
-        // age_field fully in view, its trailing side clear of the edge, so the
-        // step stops on arrival (measured: start 860 of max 1040 does).
-        scrollTo(860)
+        val start = stageHiddenErrorLabel()
+        assertTrue("the probe cannot hide error_label behind the viewport here: offset $start of max ${maxScroll()}",
+            start in 1..maxScroll())
+        scrollTo(start)
         ActionExecutor(device).execute(TestStep(action = "scrollUntilVisible",
             id = FormFooterProbeActivity.TARGET_ID, container = FormFooterProbeActivity.SCROLL_ID))
         val failure = runCatching {
@@ -152,11 +211,6 @@ class FormFooterOnDeviceTest {
         assertTrue(text, text.contains("most likely off-screen"))
         assertTrue(text, text.contains(
             "scroll container: '${FormFooterProbeActivity.SCROLL_ID}' (from the target's scrollable ancestor)"))
-    }
-
-    private fun maxScrollAfterLaunch(): Int {
-        launch()
-        return maxScroll()
     }
 
     @Test
