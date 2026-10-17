@@ -1,0 +1,51 @@
+{
+  "type": "screen",
+  "source": {
+    "layout": "progress_probe"
+  },
+  "metadata": {
+    "name": "ProgressProbe",
+    "description": "Records the progress lines of a real run: a pass, a failure with one retry, two skips (flag, platform), a name of exactly 200 characters, one longer than 200, and a teardown that fails (its own row)."
+  },
+  "cases": [
+    {
+      "name": "settles first try",
+      "steps": []
+    },
+    {
+      "name": "hopeless",
+      "steps": [
+        {
+          "assert": "visible",
+          "id": "jsonui_no_such_id",
+          "timeout": 300
+        }
+      ]
+    },
+    {
+      "name": "skipped by flag",
+      "skip": true,
+      "steps": []
+    },
+    {
+      "name": "ios only",
+      "platform": "ios",
+      "steps": []
+    },
+    {
+      "name": "at limit 界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界",
+      "steps": []
+    },
+    {
+      "name": "long 名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名",
+      "steps": []
+    }
+  ],
+  "teardown": [
+    {
+      "assert": "visible",
+      "id": "jsonui_no_such_teardown_id",
+      "timeout": 300
+    }
+  ]
+}
