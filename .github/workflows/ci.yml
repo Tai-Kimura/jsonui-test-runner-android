@@ -1,6 +1,6 @@
 name: CI
 
-# JVM units on every push/PR, plus the 20 on-device tests (src/androidTest)
+# JVM units on every push/PR, plus every on-device test (src/androidTest)
 # on a headless emulator. Public repo: standard hosted runners only, which
 # are free here. Do not move these jobs to larger runners.
 #
