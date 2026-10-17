@@ -47,8 +47,17 @@ jobs:
 
   on-device:
     runs-on: ubuntu-latest
-    # Budget: provisional (step 60, job 75) until the first CI run is measured.
-    timeout-minutes: 75
+    # Budget, from run 39047136816 (2026-10-17, good runner): emulator step
+    # 9.0 min = boot to adb ~1.5 + Gradle 7.6 (build ~3.2 + 20 cases 4.4).
+    # Hosted emulators run up to ~3x slower on a degraded runner (jsonui-cli
+    # conformance-mobile.yml, android-library-tests budget notes): the
+    # build and the cases scale, the boot is capped by emulator-boot-timeout
+    # (5). Degraded: 5 + (3.2 + 4.4) x 3 = 27.8 min; step 40 holds that
+    # with ~1.4x margin and is ~4.4x the good run (2x margin on the good
+    # run alone would be 18, which a degraded runner overruns). Job = step + setup/upload ~2
+    # + slack -> 50 (attempt < step < job). A cancelled run here means
+    # suspect this number first, and re-measure.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -68,7 +77,7 @@ jobs:
       # these tests are written against). device-evidence/device.txt records
       # what the run actually got.
       - name: Run on-device tests (emulator)
-        timeout-minutes: 60
+        timeout-minutes: 40
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
