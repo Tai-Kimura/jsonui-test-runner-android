@@ -263,7 +263,7 @@ With `resultsPath` **unset**, each run (one `runScreenTest` / `runFlowTest`,
 i.e. one test file) writes its results JSON to a default folder on the device:
 
 ```
-/data/local/tmp/jsonui-test-results/<package>/<UTC yyyyMMddTHHmmss.SSSZ>-<run id>.json
+/data/local/tmp/jsonui-test-results/<package>/<UTC yyyyMMddTHHmmss.SSSZ>-<run id>-<fileKey8>.json
 ```
 
 - One new file per run — never overwritten — so past runs stay readable.
@@ -273,11 +273,17 @@ i.e. one test file) writes its results JSON to a default folder on the device:
   `[A-Za-z0-9._-]` become `_`). The file has the usual results shape plus
   `run` (the same run id the progress records in logcat carry), `app` and
   `suites[0].file` (the progress records' `file`), so viz can match it to the
-  live progress of the same run.
-- After each write the folder is pruned: files older than 14 days go, then
-  only the newest 500 stay. Only files whose name matches the pattern above
-  are ever deleted; nothing else in the folder, and no other app's folder,
-  is touched.
+  live progress of the same run. `<fileKey8>` is the first 8 hex digits of
+  SHA-256 over that `file`, so pruning tells one test file's results from
+  another's by name alone (the folder is listed through the shell).
+- After each write the folder is pruned. The latest result of every test file
+  always stays, however old and however many other files ran since; 14 days
+  and 500 files apply only to results a newer one of the same test file
+  replaced (and to names of the earlier shape, `<time>-<run id>.json`). Only
+  names of these forms are ever deleted; nothing else in the folder, and no
+  other app's folder, is touched. The rule and its cases are
+  jsonui-test-runner `specs/vectors/results-prune.json`, shared by the three
+  drivers and `jui viz` (whose copy of this folder follows the same rule).
 - **`JSONUI_TEST_RESULTS_DIR` has no effect on the device.** It moves the
   host-side folder (iOS simulator runs, web, viz) only; the instrumentation
   cannot see the host's environment, so this folder is fixed.

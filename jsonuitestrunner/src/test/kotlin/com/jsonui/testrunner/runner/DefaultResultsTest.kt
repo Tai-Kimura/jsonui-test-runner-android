@@ -65,6 +65,9 @@ class DefaultResultsTest {
         12L
     )
 
+    /** Every file the helper write() makes is a result of this test file. */
+    private val login = DefaultResults.fileKey(listOf("screens/login.test.json"))
+
     @Before fun setUp() {
         base = Files.createTempDirectory("default-results").toFile()
         appDir = File(base, "com.example.app")
@@ -93,7 +96,7 @@ class DefaultResultsTest {
         val files = appDir.listFiles()!!.toList()
         assertEquals(1, files.size)
         val f = files.single()
-        assertEquals(DefaultResults.fileName(now, run1), f.name)
+        assertEquals(DefaultResults.fileName(now, run1, login), f.name)
         assertTrue(DefaultResults.NAME_REGEX.matches(f.name))
         val json = read(f)
         assertEquals(
@@ -120,7 +123,7 @@ class DefaultResultsTest {
         write(run = run2, at = now + 1)
         val names = appDir.list()!!.sorted()
         assertEquals(2, names.size)
-        assertEquals(first, File(appDir, DefaultResults.fileName(now, run1)).readText())
+        assertEquals(first, File(appDir, DefaultResults.fileName(now, run1, login)).readText())
         assertEquals(run2, read(File(appDir, names[1]))["run"]!!.jsonPrimitive.content)
     }
 
@@ -133,17 +136,17 @@ class DefaultResultsTest {
 
     // 3. pruning.
     @Test
-    fun `pruning keeps the newest 500, drops the 15-day-old one, touches nothing else`() {
+    fun `one test file rerun - pruning keeps the newest 500, drops the 15-day-old one, touches nothing else`() {
         appDir.mkdirs()
         val sibling = File(base, "com.other.app").apply { mkdirs() }
-        val siblingFile = File(sibling, DefaultResults.fileName(now - 30L * 86_400_000, run2)).apply { writeText("{}") }
+        val siblingFile = File(sibling, DefaultResults.fileName(now - 30L * 86_400_000, run2, login)).apply { writeText("{}") }
         val foreign = File(appDir, "notes.json").apply { writeText("{}") }
-        val tmpLeft = File(appDir, ".${DefaultResults.fileName(now - 20L * 86_400_000, run2)}.tmp").apply { writeText("{}") }
-        val old = File(appDir, DefaultResults.fileName(now - 15L * 86_400_000, run2)).apply { writeText("{}") }
+        val tmpLeft = File(appDir, ".${DefaultResults.fileName(now - 20L * 86_400_000, run2, login)}.tmp").apply { writeText("{}") }
+        val old = File(appDir, DefaultResults.fileName(now - 15L * 86_400_000, run2, login)).apply { writeText("{}") }
         // 505 recent ones, one per second ending 10 s before the write.
         val recent = (0 until 505).map { i ->
             val id = "%08x-0000-4000-8000-%012x".format(i, i)
-            File(appDir, DefaultResults.fileName(now - 10_000 - (505 - i) * 1000L, id)).apply { writeText("{}") }
+            File(appDir, DefaultResults.fileName(now - 10_000 - (505 - i) * 1000L, id, login)).apply { writeText("{}") }
         }
         write()
         val left = appDir.list()!!.toSet()
@@ -153,7 +156,7 @@ class DefaultResultsTest {
         assertTrue("sibling app folder was touched", siblingFile.exists())
         val matching = left.filter { DefaultResults.NAME_REGEX.matches(it) }.sorted()
         assertEquals(500, matching.size)
-        assertEquals(DefaultResults.fileName(now, run1), matching.last())
+        assertEquals(DefaultResults.fileName(now, run1, login), matching.last())
         // newest 499 of the pre-existing kept, the 6 oldest gone
         assertEquals(recent.takeLast(499).map { it.name }, matching.dropLast(1))
     }
@@ -166,10 +169,11 @@ class DefaultResultsTest {
     }
 
     @Test
-    fun `a 13-day-old file is kept, the boundary is 14 days`() {
-        val keep = DefaultResults.fileName(now - 14L * 86_400_000 + 1, run1)
-        val drop = DefaultResults.fileName(now - 14L * 86_400_000 - 1, run2)
-        assertEquals(listOf(drop), DefaultResults.toPrune(listOf(keep, drop), now))
+    fun `a replaced file under 14 days old is kept, the boundary is 14 days`() {
+        val keep = DefaultResults.fileName(now - 14L * 86_400_000 + 1, run1, login)
+        val drop = DefaultResults.fileName(now - 14L * 86_400_000 - 1, run2, login)
+        val latest = DefaultResults.fileName(now, "%08x-0000-4000-8000-%012x".format(9, 9), login)
+        assertEquals(listOf(drop), DefaultResults.toPrune(listOf(keep, drop, latest), now))
     }
 
     // 4. resultsPath set → old behaviour.
@@ -192,8 +196,11 @@ class DefaultResultsTest {
     // 5. name + sanitize.
     @Test
     fun `name format and regex round-trip`() {
-        val name = DefaultResults.fileName(1_792_347_420_123L, run1)
-        assertEquals("20261018T181700.123Z-$run1.json", name)
+        val name = DefaultResults.fileName(1_792_347_420_123L, run1, "abcd1234")
+        assertEquals("20261018T181700.123Z-$run1-abcd1234.json", name)
+        assertEquals("abcd1234", DefaultResults.NAME_REGEX.matchEntire(name)!!.groupValues[1])
+        // the earlier shape (1.19.0) still matches, without a key
+        assertEquals("", DefaultResults.NAME_REGEX.matchEntire("20261018T181700.123Z-$run1.json")!!.groupValues[1])
         assertTrue(DefaultResults.NAME_REGEX.matches(name))
         assertEquals(1_792_347_420_123L, DefaultResults.timeOf(name))
         assertEquals("2026-10-18T18:17:00.123Z", DefaultResults.generatedAt(1_792_347_420_123L))

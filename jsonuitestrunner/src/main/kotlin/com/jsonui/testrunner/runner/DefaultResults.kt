@@ -4,6 +4,7 @@ import android.app.UiAutomation
 import com.jsonui.testrunner.models.RunNotices
 import com.jsonui.testrunner.models.TestSuiteResult
 import java.io.File
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -33,19 +34,34 @@ internal object DefaultResults {
     /** Device-side base; the app segment is [ArtifactPaths.sanitize]d package name. */
     const val DEVICE_BASE = "/data/local/tmp/jsonui-test-results"
 
-    /** Files older than this (by the timestamp in their name) are pruned. */
+    /** A result a newer one of the same test file replaced goes after this (by the time in its name). */
     const val MAX_AGE_MS = 14L * 24 * 60 * 60 * 1000
 
-    /** At most this many result files are kept per app folder (newest by name). */
+    /** Replaced results go, oldest first, until at most this many files remain per app folder. */
     const val MAX_FILES = 500
 
     /**
      * The ONLY names pruning may delete. A dot-prefixed tmp, a file someone
-     * else put there, a sub-folder: none match, so none are touched.
+     * else put there, a sub-folder: none match, so none are touched. Group 1
+     * is the file key; a name of the earlier shape (1.19.0, no key) still
+     * matches, without it.
      */
     val NAME_REGEX = Regex(
-        """^\d{8}T\d{6}\.\d{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$"""
+        """^\d{8}T\d{6}\.\d{3}Z-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-([0-9a-f]{8}))?\.json$"""
     )
+
+    /**
+     * The run's file key in a name: the first 8 hex digits of SHA-256 over the
+     * UTF-8 of its test files (distinct, sorted, joined with a newline). With
+     * it, pruning tells one test file's results from another's by name alone:
+     * the device folder is listed through the shell, and reading 500 files
+     * there would be slow. jsonui-test-runner specs/vectors/results-prune.json.
+     */
+    fun fileKey(files: List<String>): String {
+        val key = files.distinct().sorted().joinToString("\n")
+        val digest = MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }.take(8)
+    }
 
     // SimpleDateFormat, not java.time: minSdk is 24 and java.time is 26+.
     private fun utc(pattern: String) =
@@ -53,9 +69,9 @@ internal object DefaultResults {
 
     private const val NAME_TIME = "yyyyMMdd'T'HHmmss.SSS'Z'"
 
-    /** `<UTC yyyyMMdd'T'HHmmss.SSS'Z'>-<run>.json` — name order == time order. */
-    fun fileName(epochMs: Long, run: String): String =
-        "${utc(NAME_TIME).format(Date(epochMs))}-$run.json"
+    /** `<UTC yyyyMMdd'T'HHmmss.SSS'Z'>-<run>-<fileKey8>.json` — name order == time order. */
+    fun fileName(epochMs: Long, run: String, fileKey8: String): String =
+        "${utc(NAME_TIME).format(Date(epochMs))}-$run-$fileKey8.json"
 
     /** The file's `generatedAt` — the same instant its name carries. */
     fun generatedAt(epochMs: Long): String =
@@ -73,16 +89,27 @@ internal object DefaultResults {
         "$DEVICE_BASE/${ArtifactPaths.sanitize(packageName)}"
 
     /**
-     * Which of [names] to delete, in one app folder: matching names whose
-     * timestamp is older than [MAX_AGE_MS], then the oldest beyond the newest
-     * [MAX_FILES]. Anything that does not match [NAME_REGEX] is never chosen.
+     * Which of [names] to delete, in one app folder, in name order. The newest
+     * name of each file key is always kept: a test file not rerun keeps its
+     * latest result however old, and however many other files ran since. The
+     * rest — older names of the same key, and names of the earlier shape — go
+     * when older than [maxAgeMs], then oldest first until at most [maxFiles]
+     * names remain (a folder of more test files than that keeps them all).
+     * Anything that does not match [NAME_REGEX] is never chosen.
      */
-    fun toPrune(names: List<String>, nowMs: Long): List<String> {
+    fun toPrune(names: List<String>, nowMs: Long, maxFiles: Int = MAX_FILES, maxAgeMs: Long = MAX_AGE_MS): List<String> {
         val matching = names.filter { NAME_REGEX.matches(it) }.distinct().sorted()
-        val tooOld = matching.filter { (timeOf(it) ?: return@filter false) < nowMs - MAX_AGE_MS }
-        val kept = matching - tooOld.toSet()
-        val overflow = if (kept.size > MAX_FILES) kept.take(kept.size - MAX_FILES) else emptyList()
-        return tooOld + overflow
+        val kept = matching.groupBy { NAME_REGEX.matchEntire(it)!!.groupValues[1] }
+            .filterKeys { it.isNotEmpty() }
+            .values.map { it.last() }.toSet()
+        val replaced = matching.filter { it !in kept }
+        val doomed = replaced.filter { (timeOf(it) ?: return@filter false) < nowMs - maxAgeMs }.toMutableSet()
+        var remaining = matching.size - doomed.size
+        for (name in replaced) {
+            if (remaining <= maxFiles) break
+            if (doomed.add(name)) remaining -= 1
+        }
+        return matching.filter { it in doomed }
     }
 
     /** The results JSON for one run, plus the three keys only default-location files carry. */
@@ -111,7 +138,7 @@ internal object DefaultResults {
     ): Boolean {
         if (resultsPath != null) return false
         val target = guard(notice) { store() } ?: return false
-        val name = fileName(nowMs, run)
+        val name = fileName(nowMs, run, fileKey(listOf(file)))
         val written = guard(notice) {
             target.write(name, json(suite, platform, nowMs, run, app, file))
             true
