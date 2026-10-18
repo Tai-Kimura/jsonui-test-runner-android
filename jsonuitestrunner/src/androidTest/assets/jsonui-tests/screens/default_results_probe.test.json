@@ -1,0 +1,21 @@
+{
+  "type": "screen",
+  "source": {
+    "layout": "default_results_probe"
+  },
+  "metadata": {
+    "name": "DefaultResultsProbe",
+    "description": "One passing case and one skipped case, run with resultsPath unset: the run's results must appear under /data/local/tmp/jsonui-test-results/<package>/."
+  },
+  "cases": [
+    {
+      "name": "passes",
+      "steps": []
+    },
+    {
+      "name": "skipped by flag",
+      "skip": true,
+      "steps": []
+    }
+  ]
+}

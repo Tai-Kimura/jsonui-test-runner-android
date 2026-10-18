@@ -29,8 +29,9 @@ class DeadlineCensusTest {
     private val labels = mapOf(
         // durationMs / totalDurationMs in results, and the case wall time in
         // recording.json (a wall time far above the step budgets is how a
-        // clock jump shows up there).
-        "runner/JsonUITestRunner.kt" to 14,
+        // clock jump shows up there), plus 1: the default results file's
+        // name and generatedAt, a UTC timestamp by contract (DefaultResults).
+        "runner/JsonUITestRunner.kt" to 15,
         // A mock Location's fix time is a wall-clock timestamp by contract.
         "actions/ActionExecutor.kt" to 1,
         // Deadline's own wall clock, read only to report how far it moved.

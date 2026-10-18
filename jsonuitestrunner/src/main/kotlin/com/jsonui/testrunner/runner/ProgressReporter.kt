@@ -148,6 +148,14 @@ internal class ProgressReporter(
     private var file = ProgressRecords.INLINE_FILE
 
     /**
+     * The run id and `file` the records of the current (or just finished)
+     * run carry — read by the default results write so its file names the
+     * same run as these lines. `file` as the records carry it (cut).
+     */
+    val currentRun: String get() = run
+    val currentFile: String get() = ProgressRecords.cut(file).first
+
+    /**
      * Run [body] as one run of [files] file(s), [file] being the path the
      * runner read it from: run_start before, run_end after with the counts of
      * the rows [body] returned. A body that throws gets no run_end — a reader

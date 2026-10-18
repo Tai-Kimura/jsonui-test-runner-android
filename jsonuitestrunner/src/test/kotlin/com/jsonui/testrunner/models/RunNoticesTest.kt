@@ -8,6 +8,9 @@ import java.io.File
 
 /**
  * "Your results were discarded" must be said, once, regardless of `verbose`.
+ * (Since the default results location the notice says where they went
+ * instead — /data/local/tmp/jsonui-test-results/<package>/ — but the
+ * once-per-process, not-behind-verbose rule is the same.)
  *
  * 🚨 The runner has exactly ONE println and it sits inside `log()` behind
  * `config.verbose` (default false). A consumer lane could not tell whether its
@@ -60,7 +63,7 @@ class RunNoticesTest {
     }
 
     @Test
-    fun `the notice names what is lost, not just that something is`() {
+    fun `the notice names what is kept and where, not just that something is`() {
         // A warning nobody can act on teaches people to stop reading. This one
         // has to name the fields and the setting that keeps them.
         val src = File(
@@ -68,8 +71,11 @@ class RunNoticesTest {
         ).readText()
         val block = src.substring(src.indexOf("private fun writeResultsIfNeeded"))
             .substringBefore("private fun stepDescription")
+        // Since the default results location the notice says WHERE they went
+        // instead of "discarded" — which is no longer true.
         for (needle in listOf("declaredOrientation", "observedOrientation",
-                              "resultsPath")) {
+                              "resultsPath", "DefaultResults.DEVICE_BASE",
+                              "jui viz", "adb pull")) {
             assertTrue("the notice no longer names $needle", block.contains(needle))
         }
     }

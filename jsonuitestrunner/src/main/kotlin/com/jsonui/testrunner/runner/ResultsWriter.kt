@@ -19,23 +19,41 @@ object ResultsWriter {
         file.writeText(toJson(suites, platform, generatedAt).toString())
     }
 
-    fun toJson(suites: List<TestSuiteResult>, platform: String, generatedAt: String): JsonObject {
+    /**
+     * The three keys only a default-location file carries ([DefaultResults]):
+     * the progress run id, the app id (unsanitized) and the progress `file`
+     * of the one suite. Never written to a `resultsPath` file — an older
+     * `jsonui-test report` rejects unknown keys.
+     */
+    data class DefaultLocation(val run: String, val app: String, val file: String)
+
+    fun toJson(
+        suites: List<TestSuiteResult>,
+        platform: String,
+        generatedAt: String,
+        defaultLocation: DefaultLocation? = null
+    ): JsonObject {
         return buildJsonObject {
             put("format", "jsonui-test-results")
             put("version", 1)
             put("platform", platform)
             put("generatedAt", generatedAt)
+            defaultLocation?.let {
+                put("run", it.run)
+                put("app", it.app)
+            }
             put("suites", buildJsonArray {
                 for (suite in suites) {
-                    add(suiteToJson(suite))
+                    add(suiteToJson(suite, defaultLocation?.file))
                 }
             })
         }
     }
 
-    private fun suiteToJson(suite: TestSuiteResult): JsonObject {
+    private fun suiteToJson(suite: TestSuiteResult, file: String?): JsonObject {
         return buildJsonObject {
             put("suiteName", suite.suiteName)
+            file?.let { put("file", it) }
             put("totalDurationMs", suite.totalDurationMs)
             put("results", buildJsonArray {
                 for (result in suite.results) {

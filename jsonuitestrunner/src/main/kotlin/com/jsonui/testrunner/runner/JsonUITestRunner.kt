@@ -293,7 +293,7 @@ class JsonUITestRunner(
     fun runScreenTest(test: ScreenTest, testPath: String = ""): TestSuiteResult =
         progress.run(testPath, rows = { suite: TestSuiteResult -> suite.results }) {
             runScreenTestRows(test)
-        }
+        }.also { writeDefaultResults(it) }
 
     private fun runScreenTestRows(test: ScreenTest): TestSuiteResult {
         val results = mutableListOf<TestResult>()
@@ -654,7 +654,7 @@ class JsonUITestRunner(
     fun runFlowTest(test: FlowTest, testPath: String = ""): TestSuiteResult =
         progress.run(testPath, rows = { suite: TestSuiteResult -> suite.results }) {
             runFlowTestRows(test)
-        }
+        }.also { writeDefaultResults(it) }
 
     private fun runFlowTestRows(test: FlowTest): TestSuiteResult {
         val startTime = System.currentTimeMillis()
@@ -1524,11 +1524,12 @@ class JsonUITestRunner(
             // the state that needs saying out loud.
             RunNotices.once(
                 "no-results-path",
-                "resultsPath is not set, so no results JSON is written — the " +
-                    "per-case orientation pair (declaredOrientation / " +
-                    "observedOrientation), attempts, flaky and skipped records " +
-                    "are computed and then discarded. Set TestRunnerConfig." +
-                    "resultsPath to keep them."
+                "resultsPath is not set, so results (the per-case orientation " +
+                    "pair declaredOrientation / observedOrientation, attempts, " +
+                    "flaky, skipped) are written to " +
+                    "${DefaultResults.DEVICE_BASE}/<package>/ on the device, one " +
+                    "file per run (jui viz pulls them; or adb pull). Set " +
+                    "TestRunnerConfig.resultsPath to write them somewhere you choose."
             )
             return
         }
@@ -1540,6 +1541,43 @@ class JsonUITestRunner(
                 generatedAt = java.time.Instant.now().toString()
             )
         }.onFailure { log("Failed to write results: ${it.message}") }
+    }
+
+    /**
+     * Device folder writes for the default results ([DefaultResults]); a seam
+     * so a test can point it elsewhere or make it fail. Null = write nothing.
+     */
+    internal var defaultResultsStore: () -> DefaultResultsStore? = {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val target = instrumentation.targetContext
+        DeviceResultsStore(
+            ownArea = target.getExternalFilesDir(null),
+            automation = instrumentation.uiAutomation,
+            location = DefaultResults.deviceFolder(target.packageName)
+        )
+    }
+
+    /**
+     * When resultsPath is unset: this run's results, one new file per run,
+     * under /data/local/tmp/jsonui-test-results/<package>/ (see
+     * [DefaultResults]; JSONUI_TEST_RESULTS_DIR has no effect on the device).
+     * Called after the suite result exists — and after the artifacts mirror,
+     * which it does not depend on. Never throws, never changes the suite.
+     */
+    private fun writeDefaultResults(suite: TestSuiteResult) {
+        if (config.resultsPath != null) return
+        runCatching {
+            DefaultResults.writeIfUnset(
+                resultsPath = config.resultsPath,
+                suite = suite,
+                platform = config.platform,
+                nowMs = System.currentTimeMillis(),
+                run = progress.currentRun,
+                app = InstrumentationRegistry.getInstrumentation().targetContext.packageName,
+                file = progress.currentFile,
+                store = defaultResultsStore
+            )
+        }.onFailure { if (it is VirtualMachineError) throw it }
     }
 
     private fun stepDescription(step: TestStep): String {

@@ -232,11 +232,10 @@ states deterministically:
 val config = TestRunnerConfig(
     mockServerUrl = "http://10.0.2.2:8790", // host machine from the emulator
     mockToken = System.getenv("JSONUI_MOCK_TOKEN"),
-    // Where to write the standardized results JSON. **Unset means the runner
-    // computes the per-case record and throws it away** — the orientation the
-    // case actually ran in, attempts, flaky and skipped all live here and
-    // nowhere else. The run still passes or fails normally without it; you
-    // just cannot answer "did this case run in the orientation it declared?"
+    // Where to write the standardized results JSON (the orientation the case
+    // actually ran in, attempts, flaky and skipped all live here and nowhere
+    // else). Unset, the runner writes to its default device folder instead
+    // (see "Results" below).
     resultsPath = File(
         InstrumentationRegistry.getInstrumentation().targetContext
             .getExternalFilesDir(null),
@@ -245,8 +244,7 @@ val config = TestRunnerConfig(
 )
 ```
 
-The runner prints a NOTICE once per run when `resultsPath` is unset, because
-"your results were discarded" is not something a debug flag should hide.
+Without `resultsPath`, results still land on the device — see [Results](#results).
 
 - A screen test's root `mocks` is applied and the app relaunched before the cases
   run (per-file scenario selection; split normal/empty/error into separate files).
@@ -258,6 +256,42 @@ Allow it **in the test build only** — add `android:usesCleartextTraffic="true"
 (or a `network-security-config` permitting `10.0.2.2`) to the debug/androidTest
 manifest, so both the app under test and the instrumentation can reach the mock
 server. Do not ship this in release.
+
+## Results
+
+With `resultsPath` **unset**, each run (one `runScreenTest` / `runFlowTest`,
+i.e. one test file) writes its results JSON to a default folder on the device:
+
+```
+/data/local/tmp/jsonui-test-results/<package>/<UTC yyyyMMddTHHmmss.SSSZ>-<run id>.json
+```
+
+- One new file per run — never overwritten — so past runs stay readable.
+  `jui viz` pulls this folder; `adb pull` works too. It is shell-owned, so it
+  survives the post-run uninstall of `connectedAndroidTest`.
+- `<package>` is the target app's package name (characters outside
+  `[A-Za-z0-9._-]` become `_`). The file has the usual results shape plus
+  `run` (the same run id the progress records in logcat carry), `app` and
+  `suites[0].file` (the progress records' `file`), so viz can match it to the
+  live progress of the same run.
+- After each write the folder is pruned: files older than 14 days go, then
+  only the newest 500 stay. Only files whose name matches the pattern above
+  are ever deleted; nothing else in the folder, and no other app's folder,
+  is touched.
+- **`JSONUI_TEST_RESULTS_DIR` has no effect on the device.** It moves the
+  host-side folder (iOS simulator runs, web, viz) only; the instrumentation
+  cannot see the host's environment, so this folder is fixed.
+- A write that fails (no external files dir, `/data/local/tmp` not writable,
+  the copy failing) prints one NOTICE per kind and nothing else — the test's
+  result is never affected.
+
+With `resultsPath` **set**, results go to that file only (overwritten each run,
+same shape as before, no `run` / `app` / `file` keys) and nothing is written
+to the default folder.
+
+The runner prints a NOTICE once per process when `resultsPath` is unset,
+saying where the results went — not behind `verbose`, because where your
+results are is not something a debug flag should hide.
 
 ## License
 
