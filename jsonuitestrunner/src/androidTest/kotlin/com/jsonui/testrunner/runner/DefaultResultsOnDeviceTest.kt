@@ -52,7 +52,7 @@ class DefaultResultsOnDeviceTest {
     fun resultsPathUnsetWritesTheRunToTheDeviceFolder() {
         val (run, statuses) = runProbe(null)
         assertEquals(listOf("passed", "skipped"), statuses)
-        val mine = ls().filter { it.endsWith("-$run.json") }
+        val mine = ls().filter { it.contains("-$run-") }
         assertEquals("one file for run $run in $folder: ${ls()}", 1, mine.size)
         val name = mine.single()
         assertTrue(name, DefaultResults.NAME_REGEX.matches(name))
@@ -76,7 +76,7 @@ class DefaultResultsOnDeviceTest {
         val out = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "probe-results.json")
         try {
             val (run, _) = runProbe(out)
-            assertTrue(ls().none { it.endsWith("-$run.json") })
+            assertTrue(ls().none { it.contains("-$run-") })
             val json = Json.parseToJsonElement(out.readText()).jsonObject
             assertEquals(listOf("format", "version", "platform", "generatedAt", "suites"), json.keys.toList())
         } finally {
