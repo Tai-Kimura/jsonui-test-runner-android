@@ -148,6 +148,13 @@ data class FlowTestStep(
     val label: String? = null,
     val index: Int? = null,
     val retryTapIfNoChange: Boolean? = null,
+    /**
+     * Scope for an id-targeting step: the id of a container (normally a
+     * collection cell `<collectionId>_item_<n>`) that the step's `id` (or
+     * every id of `ids`, or `cropId`, or tapItem / selectTab's derived item
+     * id) is looked for inside. Absent: the whole screen, as always.
+     */
+    val within: String? = null,
     val container: String? = null,
     val variable: String? = null,
     val times: Int? = null,
@@ -221,6 +228,13 @@ data class TestStep(
     val label: String? = null,
     val index: Int? = null,
     val retryTapIfNoChange: Boolean? = null,
+    /**
+     * Scope for an id-targeting step: the id of a container (normally a
+     * collection cell `<collectionId>_item_<n>`) that the step's `id` (or
+     * every id of `ids`, or `cropId`, or tapItem / selectTab's derived item
+     * id) is looked for inside. Absent: the whole screen, as always.
+     */
+    val within: String? = null,
     val container: String? = null,
     val variable: String? = null,
     val times: Int? = null,
@@ -264,6 +278,12 @@ data class StepCondition(
     val notVisible: String? = null,
     /** Instant check: element is not drawn (absent, gone or invisible), wherever it is (no polling) */
     val hidden: String? = null,
+    /**
+     * Scope for [visible] / [notVisible] / [hidden]: their id is looked for
+     * inside the element with this id (a collection cell). A container that
+     * is not there makes `visible` unmet and `notVisible` / `hidden` met.
+     */
+    val within: String? = null,
     /** Current platform matches (same rules as the step-level `platform` field) */
     val platform: PlatformTarget? = null,
     /** ViewModel state matches (requires a ViewModelStateProvider) */
@@ -272,7 +292,7 @@ data class StepCondition(
     val responsive: ResponsiveCondition? = null,
     /**
      * Raw JSON keys outside the known set
-     * (visible|notVisible|hidden|platform|state|responsive), i.e. written against a
+     * (visible|notVisible|hidden|within|platform|state|responsive), i.e. written against a
      * newer schema than this driver. Non-empty → condition is treated as
      * unmet (skip), never run-anyway, never a hard error.
      */

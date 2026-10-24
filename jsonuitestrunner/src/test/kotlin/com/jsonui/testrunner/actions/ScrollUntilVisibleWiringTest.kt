@@ -316,7 +316,7 @@ class ScrollUntilVisibleWiringTest {
     @Test
     fun `a target the rule lost is reported after the last motion has settled`() {
         val body = codeOnly(bodyOf("unstickFromTrailingEdge"))
-        val seq = sequenceOf(body, listOf("awaitTargetSettled(", "boundsOf(id) == null", "reapproachAfterLoss(", "warningHandler"))
+        val seq = sequenceOf(body, listOf("awaitTargetSettled(", "boundsOf(target) == null", "reapproachAfterLoss(", "warningHandler"))
         // Two settles (after the drag, after the rollback), THEN the re-read,
         // a re-approach for a target the motions sent out (2026-10-18: a
         // rollback over a 4px slip pushed it off the bottom and the step
@@ -324,8 +324,8 @@ class ScrollUntilVisibleWiringTest {
         // re-read before the rollback's settle would read a moving target —
         // the very defect 1.15.0 fixed for the guard.
         assertEquals(
-            listOf("awaitTargetSettled(", "awaitTargetSettled(", "boundsOf(id) == null", "reapproachAfterLoss(",
-                "boundsOf(id) == null", "warningHandler"),
+            listOf("awaitTargetSettled(", "awaitTargetSettled(", "boundsOf(target) == null", "reapproachAfterLoss(",
+                "boundsOf(target) == null", "warningHandler"),
             seq.filter { it != "warningHandler" || seq.indexOf(it) >= 0 }.let { s ->
                 // keep only the tail from the first settle on; the outside
                 // warning precedes the motions and is another arm's subject
@@ -366,9 +366,9 @@ class ScrollUntilVisibleWiringTest {
     fun `both scroll legs confirm the target at rest before the clearance rule`() {
         val body = codeOnly(bodyOf("executeScrollUntilVisible"))
         val seq = sequenceOf(body, listOf("searchInDirection(", "awaitTargetSettled(",
-            "boundsOf(id) == null", "reapproachAfterLoss(", "unstickFromTrailingEdge("))
+            "boundsOf(target) == null", "reapproachAfterLoss(", "unstickFromTrailingEdge("))
         val perLeg = listOf("searchInDirection(", "awaitTargetSettled(",
-            "boundsOf(id) == null", "reapproachAfterLoss(", "unstickFromTrailingEdge(")
+            "boundsOf(target) == null", "reapproachAfterLoss(", "unstickFromTrailingEdge(")
         // entry exit: settle + unstick (nothing to confirm), then two legs
         // of the same shape
         assertEquals(listOf("awaitTargetSettled(", "unstickFromTrailingEdge(") + perLeg + perLeg, seq)
@@ -402,6 +402,12 @@ class ScrollUntilVisibleWiringTest {
             1, bare
         )
         assertTrue("boundsOf must exist", code.contains("private fun boundsOf(id: String): Rect?"))
+        // The target overload (a step's `id` inside its `within`) is the same
+        // helper over ElementLookup, and as stale-safe.
+        val targetDecl = code.substring(code.indexOf("private fun boundsOf(target: Target): Rect?"))
+        assertTrue("boundsOf(target) must exist", code.contains("private fun boundsOf(target: Target): Rect?"))
+        assertTrue("boundsOf(target) catches the stale node",
+            targetDecl.substring(0, targetDecl.indexOf("private fun ", 1)).contains("catch (e: StaleObjectException)"))
         // Four or more consumers, or the helper was added and not adopted.
         assertTrue(
             "boundsOf is declared but barely used: ${Regex("boundsOf\\(").findAll(code).count()}",
@@ -479,7 +485,8 @@ class ScrollUntilVisibleWiringTest {
     fun `the settle loop reads through the helper and breaks on absent`() {
         val body = codeOnly(bodyOf("awaitTargetSettled"))
         assertTrue("the settle must not re-find bare", !body.contains("findObject("))
-        assertTrue("the settle must use boundsOf", body.contains("boundsOf(id)"))
+        // `boundsOf(target)`: the step's target, scoped by its `within` (1.20).
+        assertTrue("the settle must use boundsOf", body.contains("boundsOf(target)"))
         assertTrue("absent still ends the loop", body.contains("?: break"))
     }
 

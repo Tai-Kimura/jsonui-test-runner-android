@@ -48,13 +48,17 @@ object ZeroSizeNodes {
             .isSuccess
     }
 
-    /** The 0-size nodes tagged [id] that are exposed as a resource-id. */
-    fun find(id: String): List<Hit> {
+    /**
+     * The 0-size nodes tagged [id] that are exposed as a resource-id. With
+     * [within], only those under a node tagged [within] (a step's `within`:
+     * the container's subtree, see ElementLookup).
+     */
+    fun find(id: String, within: String? = null): List<Hit> {
         if (!available) return emptyList()
         val hits = mutableListOf<Hit>()
         runCatching {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
-                runCatching { collect(id, hits) }
+                runCatching { collect(id, within, hits) }
             }
         }
         return hits
@@ -71,30 +75,38 @@ object ZeroSizeNodes {
             .mapNotNull { (it as Activity).window?.decorView }
     }
 
-    private fun collect(id: String, out: MutableList<Hit>) {
+    private fun collect(id: String, within: String?, out: MutableList<Hit>) {
         val views = ArrayDeque(rootViews())
         while (views.isNotEmpty()) {
             val view = views.removeFirst()
             if (view is ViewGroup) for (i in 0 until view.childCount) view.getChildAt(i)?.let(views::add)
             if (view !is RootForTest) continue
-            walk(view.semanticsOwner.unmergedRootSemanticsNode, false, id, out)
+            walk(view.semanticsOwner.unmergedRootSemanticsNode, false, within == null, id, within, out)
         }
     }
 
     @OptIn(ExperimentalComposeUiApi::class)
-    private fun walk(node: SemanticsNode, asResourceId: Boolean, id: String, out: MutableList<Hit>) {
+    private fun walk(
+        node: SemanticsNode,
+        asResourceId: Boolean,
+        insideAbove: Boolean,
+        id: String,
+        within: String?,
+        out: MutableList<Hit>
+    ) {
         val config = node.config
         val exposed = asResourceId ||
             config.getOrElseNullable(SemanticsPropertiesAndroid.TestTagsAsResourceId) { null } == true
+        val tag = config.getOrElseNullable(SemanticsProperties.TestTag) { null }
         val size = node.size
-        if (exposed && (size.width == 0 || size.height == 0) &&
-            config.getOrElseNullable(SemanticsProperties.TestTag) { null } == id
-        ) {
+        // Unscoped: everywhere. Scoped: the container's descendants only.
+        if (insideAbove && exposed && (size.width == 0 || size.height == 0) && tag == id) {
             val text = config.getOrElseNullable(SemanticsProperties.EditableText) { null }?.text
                 ?: config.getOrElseNullable(SemanticsProperties.Text) { null }?.joinToString(" ") { it.text }
                 ?: ""
             out.add(Hit(size.width, size.height, !config.contains(SemanticsProperties.Disabled), text))
         }
-        for (child in node.children) walk(child, exposed, id, out)
+        val childrenInside = insideAbove || (exposed && within != null && tag == within)
+        for (child in node.children) walk(child, exposed, childrenInside, id, within, out)
     }
 }

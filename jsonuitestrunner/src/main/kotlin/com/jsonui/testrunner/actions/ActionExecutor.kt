@@ -18,12 +18,13 @@ import androidx.test.uiautomator.Until
 import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.runner.AppWindow
 import com.jsonui.testrunner.runner.Deadline
+import com.jsonui.testrunner.runner.ElementLookup
+import com.jsonui.testrunner.runner.Within
 import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.ScrollHistory
 import com.jsonui.testrunner.runner.StableScreenshot
 import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
-import com.jsonui.testrunner.runner.ZeroSizeNodes
 import java.io.File
 
 /**
@@ -48,6 +49,17 @@ class ActionExecutor(
      * element text here; later steps reference it via @{name} placeholders.
      */
     var variableStore: MutableMap<String, String>? = null
+
+    /**
+     * Every id an action targets is resolved through this, with the step's
+     * `within` (null: the whole screen, exactly as before). The fixed ids of
+     * the SelectBox sheet / wheel picker (`kjui_x7q_*`) live in their own
+     * window and are never scoped.
+     */
+    private val lookup = ElementLookup(device)
+
+    /** A step's target: its id, and the container it is looked for inside (or null). */
+    private data class Target(val id: String, val within: String?)
 
     /** How many times a find-then-act is re-run when the handle goes stale. */
     private val STALE_RETRY_ATTEMPTS = 3
@@ -165,7 +177,7 @@ class ActionExecutor(
 
     private fun executeTap(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("tap requires 'id'")
-        val element = waitForElement(id, timeout)
+        val element = waitForElement(id, timeout, step.within)
 
         // If text is specified, tap on the specific text portion within the element
         val targetText = step.text
@@ -182,7 +194,7 @@ class ActionExecutor(
             val changed = device.waitForWindowUpdate(packageName, 500L)
             if (!changed) {
                 // Re-find the element; the first tap may have invalidated it
-                val retryElement = waitForElement(id, timeout)
+                val retryElement = waitForElement(id, timeout, step.within)
                 if (targetText != null) {
                     tapTextPortion(retryElement, targetText)
                 } else {
@@ -194,7 +206,7 @@ class ActionExecutor(
 
     private fun executeDoubleTap(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("doubleTap requires 'id'")
-        val element = waitForElement(id, timeout)
+        val element = waitForElement(id, timeout, step.within)
         // UIAutomator doesn't have direct double-click, so we click twice
         element.click()
         Thread.sleep(50)
@@ -203,14 +215,14 @@ class ActionExecutor(
 
     private fun executeLongPress(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("longPress requires 'id'")
-        val element = waitForElement(id, timeout)
+        val element = waitForElement(id, timeout, step.within)
         element.longClick()
     }
 
     private fun executeInput(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("input requires 'id'")
         val value = step.value ?: throw IllegalArgumentException("input requires 'value'")
-        val element = waitForElement(id, timeout)
+        val element = waitForElement(id, timeout, step.within)
         element.click() // Focus the field
         Thread.sleep(300) // Wait for keyboard to appear
 
@@ -308,7 +320,7 @@ class ActionExecutor(
 
     private fun executeClear(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("clear requires 'id'")
-        val element = waitForElement(id, timeout)
+        val element = waitForElement(id, timeout, step.within)
         element.click() // Focus the field first
         Thread.sleep(200)
 
@@ -332,7 +344,7 @@ class ActionExecutor(
         // not at fixed screen center. The `id` locates *where* to scroll, not
         // merely that it exists. Fixed screen coordinates are a last resort only
         // when bounds are unavailable.
-        val element = waitForElement(id, timeout)
+        val element = waitForElement(id, timeout, step.within)
         val bounds = element.visibleBounds
         if (!bounds.isEmpty) {
             scrollWithinBounds(bounds, direction)
@@ -346,7 +358,7 @@ class ActionExecutor(
         val id = step.id ?: throw IllegalArgumentException("swipe requires 'id'")
         val direction = step.direction ?: throw IllegalArgumentException("swipe requires 'direction'")
 
-        val element = waitForElement(id, timeout)
+        val element = waitForElement(id, timeout, step.within)
         val bounds = element.visibleBounds
 
         // Pure geometry in swipeActionLine (JVM-tested): 8px inside the
@@ -370,9 +382,9 @@ class ActionExecutor(
         // semantics tree once By.res has missed (ZeroSizeNodes).
         val deadline = Deadline.of(timeout)
         deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
-            device.findObject(By.res(id)) ?: ZeroSizeNodes.find(id).firstOrNull()
+            lookup.find(id, step.within) ?: lookup.zeroSize(id, step.within).firstOrNull()
         }?.let { return }
-        throw AssertionError(notFoundMessage(id, timeout, deadline))
+        throw AssertionError(notFoundMessage(id, timeout, deadline, step.within))
     }
 
     private fun executeWaitForAny(step: TestStep, timeout: Long) {
@@ -382,12 +394,19 @@ class ActionExecutor(
         }
 
         val deadline = Deadline.of(timeout)
-        // Find by resource-id (Compose testTag)
+        // Find by resource-id (Compose testTag); with `within`, every id is
+        // looked for inside that one container.
+        val within = step.within
         deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
-            ids.firstOrNull { device.findObject(By.res(it)) != null || ZeroSizeNodes.find(it).isNotEmpty() }
+            ids.firstOrNull { lookup.isPresent(it, within) }
         }?.let { return }
+        val names = "[${ids.joinToString(", ")}]"
+        if (within != null && lookup.container(within) == null) {
+            throw AssertionError(Within.containerNotFound(within, names, timeout) + "\n  ${deadline.describe()}")
+        }
         throw AssertionError(
-            "None of elements [${ids.joinToString(", ")}] appeared within ${timeout}ms\n  ${deadline.describe()}"
+            "None of elements $names appeared" + (within?.let { " inside container '$it'" } ?: "") +
+                " within ${timeout}ms\n  ${deadline.describe()}"
         )
     }
 
@@ -491,8 +510,9 @@ class ActionExecutor(
         val index = step.index ?: throw IllegalArgumentException("tapItem requires 'index'")
 
         // Find the item using the generated testTag pattern: {collectionId}_item_{index}
+        // (inside `within` when given — a collection nested in a cell).
         val itemId = "${id}_item_${index}"
-        val element = waitForElement(itemId, timeout)
+        val element = waitForElement(itemId, timeout, step.within)
         element.click()
     }
 
@@ -502,7 +522,7 @@ class ActionExecutor(
 
         // Find the tab using the generated testTag pattern: {tabViewId}_tab_{index}
         val tabId = "${id}_tab_${index}"
-        val element = waitForElement(tabId, timeout)
+        val element = waitForElement(tabId, timeout, step.within)
         element.click()
     }
 
@@ -510,7 +530,7 @@ class ActionExecutor(
         val id = step.id ?: throw IllegalArgumentException("selectOption requires 'id'")
 
         // Step 1: Tap the SelectBox/DateSelectBox to open the bottom sheet
-        val selectBox = waitForElement(id, timeout)
+        val selectBox = waitForElement(id, timeout, step.within)
         val tapPoint = selectBox.visibleCenter
         selectBox.click()
 
@@ -546,7 +566,7 @@ class ActionExecutor(
             // that from "tapped squarely and nothing opened".
             throw AssertionError(
                 "Neither option list nor date picker appeared within ${timeout}ms " +
-                    "after tapping '$id' at (${tapPoint.x}, ${tapPoint.y}); " + describeTarget(id)
+                    "after tapping '$id' at (${tapPoint.x}, ${tapPoint.y}); " + describeTarget(Target(id, step.within))
             )
         }
     }
@@ -681,10 +701,13 @@ class ActionExecutor(
         ScrollHistory.previousContainerId = step.container
         val direction = step.direction ?: "down"
         val timeout = step.timeout?.toLong() ?: 20000L
+        // `within` scopes the TARGET (found = inside that container); the
+        // step's `container` keeps its meaning: the surface that is scrolled.
+        val target = Target(id, step.within)
 
-        if (device.findObject(By.res(id)) != null) {
-            awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
-            unstickFromTrailingEdge(id, step.container, UnstickVia.ENTRY)
+        if (lookup.find(id, target.within) != null) {
+            awaitTargetSettled(target, TargetSettle.ON_ARRIVAL)
+            unstickFromTrailingEdge(target, step.container, UnstickVia.ENTRY)
             return
         }
 
@@ -713,21 +736,21 @@ class ActionExecutor(
         // "scroll up until <section> visible" reset step a correct no-op, and
         // a down-only search then ran to the bottom while the target sat just
         // ABOVE the viewport (intermittent by a few px of scroll position).
-        if (searchInDirection(step.container, containerBounds, id, direction,
+        if (searchInDirection(step.container, containerBounds, target, direction,
                 Deadline.of(timeout))) {
-            awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            awaitTargetSettled(target, TargetSettle.ON_ARRIVAL)
             // "Found" is a verdict about a tree that may still have been
             // moving. Once at rest, a target that is gone is just past the
             // edge it left through — reapproach it before trusting the exit.
-            if (boundsOf(id) == null && !reapproachAfterLoss(id, containerBounds, direction)) {
+            if (boundsOf(target) == null && !reapproachAfterLoss(target, containerBounds, direction)) {
                 throw AssertionError(
-                    "Element '$id' was found while scrolling $direction but had left the " +
+                    "Element ${Within.label(id, target.within)} was found while scrolling $direction but had left the " +
                         "viewport by the time the scroll came to rest, and " +
                         "$MAX_REAPPROACH_DRAGS drags back did not bring it in " +
                         "(swipes ran within ${surface.rect.toShortString()} from ${surface.source})"
                 )
             }
-            unstickFromTrailingEdge(id, step.container, UnstickVia.SCROLLED)
+            unstickFromTrailingEdge(target, step.container, UnstickVia.SCROLLED)
             return
         }
 
@@ -735,24 +758,25 @@ class ActionExecutor(
         // the step timeout scrolling a long page to its end (bounded: at most
         // one extra half-timeout).
         val reverse = oppositeDirection(direction)
-        if (searchInDirection(step.container, containerBounds, id, reverse,
+        if (searchInDirection(step.container, containerBounds, target, reverse,
                 Deadline.of(maxOf(timeout / 2, 6000L)))) {
-            awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
-            if (boundsOf(id) == null && !reapproachAfterLoss(id, containerBounds, reverse)) {
+            awaitTargetSettled(target, TargetSettle.ON_ARRIVAL)
+            if (boundsOf(target) == null && !reapproachAfterLoss(target, containerBounds, reverse)) {
                 throw AssertionError(
-                    "Element '$id' was found while scrolling $reverse but had left the " +
+                    "Element ${Within.label(id, target.within)} was found while scrolling $reverse but had left the " +
                         "viewport by the time the scroll came to rest, and " +
                         "$MAX_REAPPROACH_DRAGS drags back did not bring it in " +
                         "(swipes ran within ${surface.rect.toShortString()} from ${surface.source})"
                 )
             }
-            unstickFromTrailingEdge(id, step.container, UnstickVia.SCROLLED)
+            unstickFromTrailingEdge(target, step.container, UnstickVia.SCROLLED)
             return
         }
 
         throw AssertionError(
-            "Element '$id' not found after scrolling to both ends " +
-                "(swipes ran within ${surface.rect.toShortString()} from ${surface.source})"
+            "Element ${Within.label(id, target.within)} not found after scrolling to both ends " +
+                "(swipes ran within ${surface.rect.toShortString()} from ${surface.source})" +
+                (lookup.scopedMiss(id, target.within, timeout)?.let { "\n$it" } ?: "")
         )
     }
 
@@ -777,7 +801,7 @@ class ActionExecutor(
     private fun searchInDirection(
         containerId: String?,
         containerBounds: Rect,
-        id: String,
+        target: Target,
         direction: String,
         deadline: Deadline
     ): Boolean {
@@ -790,7 +814,7 @@ class ActionExecutor(
         // permanently — gesture scrolling then never finds an on-screen
         // element). It also scrolls in page-sized steps with no fling
         // momentum, so the overscroll-clamp freeze cannot occur at all.
-        if (semanticsScrollUntilVisible(containerId, id, direction, deadline)) return true
+        if (semanticsScrollUntilVisible(containerId, target, direction, deadline)) return true
 
         var previousSnapshot: String? = null
         var unchangedCount = 0
@@ -803,7 +827,7 @@ class ActionExecutor(
             // both settles and polls for the target.
             device.waitForIdle(1000)
             NodeCache.clear()
-            if (device.wait(Until.hasObject(By.res(id)), 800)) return true
+            if (waitForTarget(target, 800)) return true
 
             // End-reached detection: two consecutive scrolls with no change.
             // Never silently disabled — error states become distinct sentinel
@@ -825,8 +849,8 @@ class ActionExecutor(
                     nudgeBackward(containerBounds, direction)
                     device.waitForIdle(1000)
                     NodeCache.clear()
-                    if (device.wait(Until.hasObject(By.res(id)), 1500)) return true
-                    return recoverFrozenSemantics(id, containerBounds, direction)
+                    if (waitForTarget(target, 1500)) return true
+                    return recoverFrozenSemantics(target, containerBounds, direction)
                 }
             } else {
                 unchangedCount = 0
@@ -836,7 +860,7 @@ class ActionExecutor(
 
         // Last look before this leg gives up — the loop may have exited right
         // after a swipe whose settle revealed the target.
-        return device.findObject(By.res(id)) != null
+        return lookup.find(target.id, target.within) != null
     }
 
     /**
@@ -891,7 +915,7 @@ class ActionExecutor(
      * missing), so healthy pages never pay for it. Returns true when the
      * target appeared after a recovery round.
      */
-    private fun recoverFrozenSemantics(id: String, b: Rect, direction: String): Boolean {
+    private fun recoverFrozenSemantics(target: Target, b: Rect, direction: String): Boolean {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val cx = gestureSafeX(b.centerX())
         val cy = b.centerY()
@@ -916,7 +940,7 @@ class ActionExecutor(
             // and resync the a11y service state, then look again.
             NodeCache.clear(automation)
             runCatching { automation.serviceInfo = automation.serviceInfo }
-            if (device.wait(Until.hasObject(By.res(id)), 2000)) return true
+            if (waitForTarget(target, 2000)) return true
         }
         return false
     }
@@ -931,7 +955,7 @@ class ActionExecutor(
      */
     private fun semanticsScrollUntilVisible(
         containerId: String?,
-        targetId: String,
+        target: Target,
         direction: String,
         deadline: Deadline
     ): Boolean {
@@ -955,7 +979,7 @@ class ActionExecutor(
                 // once it has settled and re-approaches it when it is gone
                 // (reapproachAfterLoss); polling this tree for "rest" was tried
                 // and measured useless (it reads the same cache).
-                if (isVisibleInTree(targetId)) return@runCatching true
+                if (isVisibleInTree(target)) return@runCatching true
                 val container = findByViewId(containerId) ?: return@runCatching false
                 if (!container.isScrollable) return@runCatching false
                 val moved = container.performAction(action)
@@ -966,11 +990,11 @@ class ActionExecutor(
                 NodeCache.clear()
                 if (!moved) {
                     // End of content (or action refused): one final fresh look.
-                    return@runCatching isVisibleInTree(targetId)
+                    return@runCatching isVisibleInTree(target)
                 }
                 guard++
             }
-            isVisibleInTree(targetId)
+            isVisibleInTree(target)
         }.getOrDefault(false)
     }
 
@@ -1044,8 +1068,8 @@ class ActionExecutor(
         // semantics text (ZeroSizeNodes), "" when it has none.
         val deadline = Deadline.of(timeout)
         val text = deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
-            device.findObject(By.res(id))?.let { it.text ?: "" } ?: ZeroSizeNodes.find(id).firstOrNull()?.text
-        } ?: throw AssertionError(notFoundMessage(id, timeout, deadline))
+            lookup.find(id, step.within)?.let { it.text ?: "" } ?: lookup.zeroSize(id, step.within).firstOrNull()?.text
+        } ?: throw AssertionError(notFoundMessage(id, timeout, deadline, step.within))
         val store = variableStore
             ?: throw IllegalStateException("readText requires a variable store (set ActionExecutor.variableStore)")
         store[variable] = text
@@ -1295,8 +1319,49 @@ class ActionExecutor(
      * Any visible node with the id counts, not the first node: a repeated id
      * (list rows) can have an off-screen copy ahead of the on-screen one.
      */
-    private fun isVisibleInTree(viewId: String): Boolean =
-        findByViewId(viewId) { it.isVisibleToUser } != null
+    private fun isVisibleInTree(target: Target): Boolean =
+        findTargetNode(target) { it.isVisibleToUser } != null
+
+    /**
+     * [findByViewId] for a [Target]: unscoped, exactly that; with `within`,
+     * the first node with the target's id (and [accept]) under ANY node with
+     * the container's id — the BFS twin of ElementLookup.find.
+     */
+    private fun findTargetNode(
+        target: Target,
+        accept: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean = { true }
+    ): android.view.accessibility.AccessibilityNodeInfo? {
+        val within = target.within ?: return findByViewId(target.id, accept)
+        return runCatching {
+            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            val root = automation.rootInActiveWindow ?: return@runCatching null
+            // (node, inside the container?) — the container itself is not a match.
+            val queue = ArrayDeque<Pair<android.view.accessibility.AccessibilityNodeInfo, Boolean>>()
+            queue.add(root to false)
+            while (queue.isNotEmpty()) {
+                val (node, inside) = queue.removeFirst()
+                if (inside && node.viewIdResourceName == target.id && accept(node)) return@runCatching node
+                val childrenInside = inside || node.viewIdResourceName == within
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { queue.add(it to childrenInside) }
+                }
+            }
+            null
+        }.getOrNull()
+    }
+
+    /**
+     * Wait up to [ms] for [target] to be findable. Unscoped it is the
+     * UiAutomator wait it always was; scoped, the same poll through
+     * ElementLookup (container, then the target inside it).
+     */
+    private fun waitForTarget(target: Target, ms: Long): Boolean {
+        if (target.within == null) return device.wait(Until.hasObject(By.res(target.id)), ms)
+        val deadline = Deadline.of(ms)
+        return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
+            lookup.find(target.id, target.within)
+        } != null
+    }
 
     /**
      * BFS over a FRESH rootInActiveWindow comparing viewIdResourceName
@@ -1334,7 +1399,8 @@ class ActionExecutor(
      * must be able to tell "never needed" from "needed and worked" from
      * "needed and did not".
      */
-    private fun reapproachAfterLoss(id: String, surface: Rect, direction: String): Boolean {
+    private fun reapproachAfterLoss(target: Target, surface: Rect, direction: String): Boolean {
+        val id = target.id
         val clearance = ViewportMargin.clearanceFor(surface.height(), surface.width())
         val travel = 2 * clearance
         val landing = ViewportMargin.LANDING_CLEARANCES * clearance
@@ -1349,7 +1415,7 @@ class ActionExecutor(
         // [ViewportMargin.LANDING_CLEARANCES] clearances from that edge —
         // the same landing the clearance rule gives a flush target.
         fun clear(): Boolean {
-            val b = boundsOf(id) ?: return false
+            val b = boundsOf(target) ?: return false
             return when (direction) {
                 "up" -> b.bottom <= surface.bottom - landing   // left through the bottom
                 else -> b.top >= surface.top + landing         // left through the top
@@ -1364,14 +1430,14 @@ class ActionExecutor(
                 else -> return false
             }
             drags++
-            awaitTargetSettled(id, TargetSettle.ON_ARRIVAL)
+            awaitTargetSettled(target, TargetSettle.ON_ARRIVAL)
             NodeCache.clear()
             done = clear()
         }
-        val visible = boundsOf(id) != null
+        val visible = boundsOf(target) != null
         println("[ActionExecutor] scrollUntilVisible '$id' [re-approach]: lost after arrival, " +
             "$drags drag(s) of ${travel}px against '$direction', visible=$visible, " +
-            "clear=$done, resting ${boundsOf(id)?.toShortString()}")
+            "clear=$done, resting ${boundsOf(target)?.toShortString()}")
         return visible
     }
 
@@ -1444,11 +1510,12 @@ class ActionExecutor(
      * a total over dozens of cases cannot say whether one step reached its own
      * 20s limit. Read the settle lines, not the lane time.
      */
-    private fun unstickFromTrailingEdge(id: String, containerId: String?, via: String) {
+    private fun unstickFromTrailingEdge(target: Target, containerId: String?, via: String) {
+        val id = target.id
         val surface = (containerId?.let { cid ->
             boundsOf(cid)?.takeIf { !it.isEmpty }
         } ?: appSurfaceBounds().rect)
-        val before = boundsOf(id) ?: return
+        val before = boundsOf(target) ?: return
         // 🚨 THE RULE CAN ONLY MOVE A TARGET THAT IS INSIDE THE SURFACE IT
         // SCROLLS, and until now it never asked. `isFlushAgainstTrailingEdge`
         // reads one edge; a target painted BELOW the container — a pinned
@@ -1566,8 +1633,8 @@ class ActionExecutor(
         //       parked where the failed tap caught it. Measured: 27px of
         //       travel after this function returned, 1px in the 5s after the
         //       tap. 1 failure in 5 identical runs.
-        awaitTargetSettled(id, TargetSettle.AFTER_UNSTICK)
-        val after = boundsOf(id)
+        awaitTargetSettled(target, TargetSettle.AFTER_UNSTICK)
+        val after = boundsOf(target)
         val slop = touchSlop()
         val keep = ViewportMargin.keepScrolledPosition(
             before.bottom, after?.bottom, surface.bottom, slop)
@@ -1584,7 +1651,7 @@ class ActionExecutor(
             if (rollback != 0) {
                 device.swipe(UnstickMotion.path(cx, cy - rollback / 2, cy + rollback / 2), UnstickMotion.STEPS)
             }
-            awaitTargetSettled(id, TargetSettle.AFTER_REVERT)
+            awaitTargetSettled(target, TargetSettle.AFTER_REVERT)
         }
         // 🚨 THE STEP'S PROMISE IS VISIBILITY, AND THIS IS WHERE IT IS CHECKED.
         // Every exit of scrollUntilVisible reached this function with the
@@ -1604,10 +1671,10 @@ class ActionExecutor(
         // (ViewportMargin.reapproachDirection): a drag that took it out of
         // view overshot through the top; a downward rollback or a slip
         // sends it out through the bottom.
-        if (boundsOf(id) == null) {
-            reapproachAfterLoss(id, surface, ViewportMargin.reapproachDirection(after == null, rollback))
+        if (boundsOf(target) == null) {
+            reapproachAfterLoss(target, surface, ViewportMargin.reapproachDirection(after == null, rollback))
         }
-        if (boundsOf(id) == null) {
+        if (boundsOf(target) == null) {
             val line = "WARN [scrollUntilVisible] '$id' was found and then lost by the " +
                 "edge-clearance motion: it is no longer visible after " +
                 (if (keep) "a drag of ${step}px" else "a drag of ${step}px and a rollback of ${rollback}px") +
@@ -1792,7 +1859,15 @@ class ActionExecutor(
         null
     }
 
-    private fun awaitTargetSettled(id: String, phase: String) {
+    /** [boundsOf] for a step's target, inside its `within` when it has one. */
+    private fun boundsOf(target: Target): Rect? = try {
+        lookup.find(target.id, target.within)?.visibleBounds
+    } catch (e: StaleObjectException) {
+        null
+    }
+
+    private fun awaitTargetSettled(target: Target, phase: String) {
+        val id = target.id
         val budget = Deadline.of(TargetSettle.BUDGET_MS)
         val samples = mutableListOf<Box>()
         while (!budget.expired()) {
@@ -1800,7 +1875,7 @@ class ActionExecutor(
             // would repeat the first and "settle" at once (NodeCache).
             NodeCache.clear()
             // Gone mid-animation (recomposed away): nothing to settle on.
-            val b = boundsOf(id) ?: break
+            val b = boundsOf(target) ?: break
             samples.add(Box(b.left, b.top, b.right, b.bottom))
             if (TargetSettle.settled(samples)) break
             Thread.sleep(TargetSettle.SAMPLE_INTERVAL_MS)
@@ -1812,10 +1887,11 @@ class ActionExecutor(
      * Visible bounds, unclipped bounds and the nearest scrollable ancestor of
      * [id], as one line for a failure message (see [TargetSettle.describe]).
      */
-    private fun describeTarget(id: String): String {
-        val visible = boundsOf(id)
+    private fun describeTarget(target: Target): String {
+        val id = target.id
+        val visible = boundsOf(target)
             ?.let { Box(it.left, it.top, it.right, it.bottom) }
-        val node = findByViewId(id)
+        val node = findTargetNode(target)
         val full = node?.let { n -> Rect().also { n.getBoundsInScreen(it) } }
             ?.let { Box(it.left, it.top, it.right, it.bottom) }
         var clipper: Pair<String, Box>? = null
@@ -1836,11 +1912,13 @@ class ActionExecutor(
     /**
      * Wait for element to appear by id (using resource-id)
      */
-    private fun waitForElement(id: String, timeout: Long): UiObject2 {
+    private fun waitForElement(id: String, timeout: Long, within: String? = null): UiObject2 {
         val deadline = Deadline.of(timeout)
-        // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
-        return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.res(id)) }
-            ?: throw AssertionError(notFoundMessage(id, timeout, deadline))
+        // Find by resource-id (Compose testTag with testTagsAsResourceId = true);
+        // with `within`, the container first and the id among its descendants,
+        // both inside this one deadline (ElementLookup).
+        return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { lookup.find(id, within) }
+            ?: throw AssertionError(notFoundMessage(id, timeout, deadline, within))
     }
 
     /**
@@ -1848,11 +1926,17 @@ class ActionExecutor(
      * box is 0 x 0 (ZeroSizeNodes), it says so instead: the element exists,
      * as on iOS, but there is nothing to tap, type into, scroll or swipe.
      */
-    private fun notFoundMessage(id: String, timeout: Long, deadline: Deadline): String {
-        ZeroSizeNodes.find(id).firstOrNull()?.let { hit ->
-            return "Element '$id' exists, but its drawn box is ${hit.width}x${hit.height}: " +
+    private fun notFoundMessage(id: String, timeout: Long, deadline: Deadline, within: String? = null): String {
+        lookup.zeroSize(id, within).firstOrNull()?.let { hit ->
+            return "Element ${Within.label(id, within)} exists, but its drawn box is ${hit.width}x${hit.height}: " +
                 "there is nothing to act on (an empty container draws no area). " +
                 "Waited ${timeout}ms."
+        }
+        // Scoped: which one was missing — the container or the target in it —
+        // then the whole-screen census of the target id (a copy outside the
+        // container shows up there).
+        lookup.scopedMiss(id, within, timeout)?.let { miss ->
+            return miss + "\n" + FindTimeoutReport.render(device, id, deadline)
         }
         return "Element '$id' not found by resource-id within ${timeout}ms\n" +
             FindTimeoutReport.render(device, id, deadline) + "\n" + ProjectionProbe.report(id)

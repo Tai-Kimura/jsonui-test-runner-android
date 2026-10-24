@@ -168,6 +168,28 @@ previous stop.
 | count | id, equals | timeout | Element count |
 | state | path, equals | timeout | A value of the screen's Data (see below) |
 
+## `within`: an id inside one element
+
+Every step that targets an element by id (the actions above, `selectOption`,
+`readText`, `tapItem` / `selectTab`, the `visible` / `notVisible` / `hidden` /
+`enabled` / `disabled` / `text` / `count` assertions, `screenshot`'s `cropId`)
+takes an optional `within`: the id of a container, normally a collection cell
+`<collectionId>_item_<n>`. The container is found by its id within the step's
+timeout, and the target among its descendants — so the cells' repeated ids
+are told apart:
+
+```json
+{ "assert": "text", "id": "field_label", "within": "fields_item_2", "equals": "年数" }
+```
+
+A cell exists in the tree only while it is drawn: `scrollUntilVisible` to the
+cell first. With a missing container, `visible` fails (naming the container)
+and `notVisible` / `hidden` hold; `count` counts inside the container and
+fails when it is missing. Conditions take it too:
+`"when": { "visible": "badge", "within": "rows_item_0" }`. In
+`scrollUntilVisible`, `within` scopes the target and `container` is still the
+surface that is scrolled.
+
 ## initialState and `state`
 
 A screen test's `initialState.viewModel` (and a flow's

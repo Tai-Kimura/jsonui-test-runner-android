@@ -2,7 +2,6 @@ package com.jsonui.testrunner.runner
 
 import androidx.test.platform.app.InstrumentationRegistry
 import com.jsonui.testrunner.models.RunDefaultsSource
-import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import com.jsonui.testrunner.actions.ActionExecutor
 import com.jsonui.testrunner.actions.OrientationCommand
@@ -248,6 +247,8 @@ class JsonUITestRunner(
         variableStore = variables
         warningHandler = { message -> currentWarnings.add(message) }
     }
+    /** Id resolution for `when` / `while` conditions (with their `within`). */
+    private val elementLookup = ElementLookup(device)
     private val assertionExecutor = AssertionExecutor(device, config.defaultTimeout).apply {
         baselineDir = config.baselineDir
         updateBaselines = config.updateBaselines
@@ -1054,9 +1055,11 @@ class JsonUITestRunner(
         }
         condition.platform?.let { if (!it.includes(config.platform)) return false }
         condition.responsive?.let { if (!currentSizeMatches(it)) return false }
-        condition.visible?.let { if (device.findObject(By.res(it)) == null) return false }
-        condition.notVisible?.let { if (device.findObject(By.res(it)) != null) return false }
-        condition.hidden?.let { if (!assertionExecutor.isHidden(it)) return false }
+        // `within` scopes the three id keys (ElementLookup); a missing
+        // container finds nothing, so visible is unmet, notVisible / hidden met.
+        condition.visible?.let { if (elementLookup.find(it, condition.within) == null) return false }
+        condition.notVisible?.let { if (elementLookup.find(it, condition.within) != null) return false }
+        condition.hidden?.let { if (!elementLookup.isHidden(it, condition.within)) return false }
         condition.state?.let {
             if (!assertionExecutor.stateMatches(it.path, it.equals)) return false
         }
@@ -1393,6 +1396,7 @@ class JsonUITestRunner(
         label = label,
         index = index,
         retryTapIfNoChange = retryTapIfNoChange,
+        within = within,
         container = container,
         variable = variable,
         times = times,
@@ -1585,7 +1589,7 @@ class JsonUITestRunner(
             step.action != null -> "action=${step.action}, id=${step.id ?: step.ids?.joinToString(",") ?: "-"}"
             step.assert != null -> "assert=${step.assert}, id=${step.id ?: "-"}"
             else -> "unknown step"
-        }
+        } + (step.within?.let { ", within=$it" } ?: "")
     }
 
     /**
@@ -1783,6 +1787,7 @@ class JsonUITestRunner(
             name = substituteArgsInString(step.name, args),
             path = substituteArgsInString(step.path, args),
             container = substituteArgsInString(step.container, args),
+            within = substituteArgsInString(step.within, args),
             cropId = substituteArgsInString(step.cropId, args),
             equals = substituteArgsInJsonElement(step.equals, args)
         )

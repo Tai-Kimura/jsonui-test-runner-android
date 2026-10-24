@@ -9,11 +9,11 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.jsonui.testrunner.models.TestStep
 import com.jsonui.testrunner.runner.Deadline
+import com.jsonui.testrunner.runner.ElementLookup
 import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.ProjectionProbe
 import com.jsonui.testrunner.runner.ZeroSizeNodes
-import com.jsonui.testrunner.runner.HiddenNodes
 import com.jsonui.testrunner.runner.ViewModelStateProvider
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -42,6 +42,12 @@ class AssertionExecutor(
      */
     private val screenTransitionTimeout: Long = 10000L
 ) {
+
+    /**
+     * Every id here is resolved through this, with the step's `within`
+     * (null: the whole screen, exactly as before).
+     */
+    private val lookup = ElementLookup(device)
 
     /** State provider for `state` assertions (injected by the runner) */
     var stateProvider: ViewModelStateProvider? = null
@@ -126,19 +132,35 @@ class AssertionExecutor(
      * run pays nothing — and the next intermittent occurrence answers, by
      * itself, the question a consumer could not reproduce on demand.
      */
-    private fun elementNotFound(id: String, within: String, deadline: Deadline? = null): String =
-        "Element '$id' not found by resource-id within $within\n" +
+    private fun elementNotFound(id: String, waited: String, deadline: Deadline? = null): String =
+        "Element '$id' not found by resource-id within $waited\n" +
             (deadline?.let { FindTimeoutReport.render(device, id, it) + "\n" } ?: "") +
             ProjectionProbe.report(id)
 
+    /**
+     * Not found, scoped or not: with `within`, which of the two was missing —
+     * the container, or the target inside it (ElementLookup / Within). The
+     * same-id census of the whole screen follows, so a target that exists
+     * only OUTSIDE the container says so.
+     */
+    private fun notFound(id: String, within: String?, timeout: Long, waited: String, deadline: Deadline? = null): String =
+        lookup.scopedMiss(id, within, timeout)?.let { miss ->
+            miss + (deadline?.let { "\n" + FindTimeoutReport.render(device, id, it) } ?: "")
+        } ?: elementNotFound(id, waited, deadline)
+
+    /** How a message names the element: `'x'`, or `'x' inside 'c'` with `within`. */
+    private fun named(id: String, within: String?) =
+        com.jsonui.testrunner.runner.Within.label(id, within)
+
     private fun assertVisible(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("visible requires 'id'")
+        val within = step.within
         pollUntil(timeout, id) {
-            findElement(id) ?: throw AssertionError(
-                ZeroSizeNodes.find(id).firstOrNull()?.let { hit ->
-                    "Element '$id' exists, but its drawn box is ${hit.width}x${hit.height}, so it is not visible " +
+            findElement(id, within) ?: throw AssertionError(
+                lookup.zeroSize(id, within).firstOrNull()?.let { hit ->
+                    "Element ${named(id, within)} exists, but its drawn box is ${hit.width}x${hit.height}, so it is not visible " +
                         "(iOS: exists, not hittable, empty frame). Waited ${timeout}ms."
-                } ?: elementNotFound(id, "${timeout}ms")
+                } ?: notFound(id, within, timeout, "${timeout}ms")
             )
         }
     }
@@ -146,9 +168,10 @@ class AssertionExecutor(
     private fun assertNotVisible(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("notVisible requires 'id'")
         // Passes as soon as the element is gone; polled from t=0 (no fixed pre-wait)
+        // With `within`, a container that is not there holds no element: met.
         pollUntil(timeout, id) {
-            if (findElement(id) != null) {
-                throw AssertionError("Element '$id' should not be visible but it is still visible after ${timeout}ms")
+            if (findElement(id, step.within) != null) {
+                throw AssertionError("Element ${named(id, step.within)} should not be visible but it is still visible after ${timeout}ms")
             }
         }
     }
@@ -157,12 +180,15 @@ class AssertionExecutor(
      * Not drawn, wherever it is: absent, gone, or invisible / hidden (HiddenNodes).
      * A view off screen, under a dialog, at opacity 0 or disabled is drawn, so
      * `hidden` fails on it — unlike `notVisible`, which is about the viewport.
+     * Every element with the id counts (as on web): hidden only when none of
+     * them is drawn. With `within`, only those inside the container; a
+     * container that is not there holds none, so hidden holds.
      */
     private fun assertHidden(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("hidden requires 'id'")
         pollUntil(timeout, id) {
-            if (!isHidden(id)) {
-                throw AssertionError("Element '$id' should be hidden but it is shown (drawn, wherever it is) after ${timeout}ms")
+            if (!isHidden(id, step.within)) {
+                throw AssertionError("Element ${named(id, step.within)} should be hidden but it is shown (drawn, wherever it is) after ${timeout}ms")
             }
         }
     }
@@ -172,14 +198,14 @@ class AssertionExecutor(
      * the semantics tree cannot be read: absent from the accessibility tree is
      * the best answer there, and it cannot tell off-screen from not drawn.
      */
-    fun isHidden(id: String): Boolean = HiddenNodes.isHidden(id) ?: (findElement(id) == null)
+    fun isHidden(id: String, within: String? = null): Boolean = lookup.isHidden(id, within)
 
     private fun assertEnabled(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("enabled requires 'id'")
         pollUntil(timeout, id) {
-            val enabled = findElement(id)?.isEnabled
-                ?: ZeroSizeNodes.find(id).firstOrNull()?.enabled
-                ?: throw AssertionError(elementNotFound(id, "${timeout}ms"))
+            val enabled = findElement(id, step.within)?.isEnabled
+                ?: lookup.zeroSize(id, step.within).firstOrNull()?.enabled
+                ?: throw AssertionError(notFound(id, step.within, timeout, "${timeout}ms"))
             if (!enabled) {
                 throw AssertionError("Element '$id' should be enabled but it is disabled")
             }
@@ -189,9 +215,9 @@ class AssertionExecutor(
     private fun assertDisabled(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("disabled requires 'id'")
         pollUntil(timeout, id) {
-            val enabled = findElement(id)?.isEnabled
-                ?: ZeroSizeNodes.find(id).firstOrNull()?.enabled
-                ?: throw AssertionError(elementNotFound(id, "${timeout}ms"))
+            val enabled = findElement(id, step.within)?.isEnabled
+                ?: lookup.zeroSize(id, step.within).firstOrNull()?.enabled
+                ?: throw AssertionError(notFound(id, step.within, timeout, "${timeout}ms"))
             if (enabled) {
                 throw AssertionError("Element '$id' should be disabled but it is enabled")
             }
@@ -209,11 +235,13 @@ class AssertionExecutor(
     }
 
     private fun assertTextOnce(step: TestStep, id: String) {
-        val element = findElement(id) ?: run {
+        val element = findElement(id, step.within) ?: run {
             // An element whose drawn box is 0 x 0 reads its semantics text, as
             // iOS reads value / label (ZeroSizeNodes).
-            val hit = ZeroSizeNodes.find(id).firstOrNull()
-                ?: throw AssertionError(elementNotFound(id, "a step of polling"))
+            val hit = lookup.zeroSize(id, step.within).firstOrNull()
+                ?: throw AssertionError(
+                    notFound(id, step.within, step.timeout?.toLong() ?: defaultTimeout, "a step of polling")
+                )
             return compareText(step, id, hit.text)
         }
 
@@ -281,9 +309,19 @@ class AssertionExecutor(
         pollUntil(timeout, id) {
             // iOS counts an element whatever its size; Android's tree has no
             // node for one whose drawn box is 0 x 0 (ZeroSizeNodes).
-            val actualCount = device.findObjects(By.res(id)).size + ZeroSizeNodes.find(id).size
+            // With `within`: the matches inside the container. Counting inside
+            // a container that is not there is not a count, so it fails
+            // naming the container instead of reading 0.
+            val within = step.within
+            if (within != null && lookup.container(within) == null) {
+                throw AssertionError(com.jsonui.testrunner.runner.Within.containerNotFound(within, id, timeout))
+            }
+            val actualCount = lookup.findAll(id, within).size + lookup.zeroSize(id, within).size
             if (actualCount != expected) {
-                throw AssertionError("Expected $expected elements with id '$id', but found $actualCount")
+                throw AssertionError(
+                    "Expected $expected elements with id '$id'" +
+                        (within?.let { " inside '$it'" } ?: "") + ", but found $actualCount"
+                )
             }
         }
     }
@@ -387,7 +425,7 @@ class AssertionExecutor(
 
         // Crop to the element's visible bounds when cropId is set
         step.cropId?.let { cropId ->
-            val element = waitForElement(cropId, timeout)
+            val element = waitForElement(cropId, timeout, step.within)
             val bounds = element.visibleBounds
             val left = bounds.left.coerceIn(0, capture.width - 1)
             val top = bounds.top.coerceIn(0, capture.height - 1)
@@ -557,25 +595,23 @@ class AssertionExecutor(
     }
 
     /**
-     * Find element by id using resource-id (testTag)
+     * Find element by id using resource-id (testTag), inside [within] when
+     * the step has one (ElementLookup).
      */
-    private fun findElement(id: String): UiObject2? {
-        // Primary: find by resource-id (Compose testTag with testTagsAsResourceId = true)
-        return device.findObject(By.res(id))
-    }
+    private fun findElement(id: String, within: String? = null): UiObject2? = lookup.find(id, within)
 
     /**
      * Wait for element to appear by id
      */
-    private fun waitForElement(id: String, timeout: Long): UiObject2 {
+    private fun waitForElement(id: String, timeout: Long, within: String? = null): UiObject2 {
         val deadline = Deadline.of(timeout)
         // Find by resource-id (Compose testTag with testTagsAsResourceId = true)
-        return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { device.findObject(By.res(id)) }
+        return deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { lookup.find(id, within) }
             ?: throw AssertionError(
-                ZeroSizeNodes.find(id).firstOrNull()?.let { hit ->
-                    "Element '$id' exists, but its drawn box is ${hit.width}x${hit.height}: there is nothing to crop to. " +
+                lookup.zeroSize(id, within).firstOrNull()?.let { hit ->
+                    "Element ${named(id, within)} exists, but its drawn box is ${hit.width}x${hit.height}: there is nothing to crop to. " +
                         "Waited ${timeout}ms."
-                } ?: elementNotFound(id, "${timeout}ms", deadline)
+                } ?: notFound(id, within, timeout, "${timeout}ms", deadline)
             )
     }
 }

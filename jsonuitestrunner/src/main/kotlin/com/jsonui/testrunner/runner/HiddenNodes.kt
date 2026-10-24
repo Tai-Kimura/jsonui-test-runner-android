@@ -51,15 +51,21 @@ object HiddenNodes {
             .isSuccess
     }
 
-    /** Whether [id] is hidden; null when the semantics tree cannot be read (no Compose). */
-    fun isHidden(id: String): Boolean? {
+    /**
+     * Whether [id] is hidden — every node tagged [id] is not drawn (or there
+     * is none); null when the semantics tree cannot be read (no Compose).
+     * With [within], only the nodes under a node tagged [within] count (a
+     * step's `within`, see ElementLookup): no such container is no node, so
+     * hidden.
+     */
+    fun isHidden(id: String, within: String? = null): Boolean? {
         if (!available) return null
         var shown = false
         var read = false
         runCatching {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 runCatching {
-                    shown = anyShown(id)
+                    shown = anyShown(id, within)
                     read = true
                 }
             }
@@ -77,26 +83,39 @@ object HiddenNodes {
             .mapNotNull { (it as Activity).window?.decorView }
     }
 
-    private fun anyShown(id: String): Boolean {
+    private fun anyShown(id: String, within: String?): Boolean {
         val views = ArrayDeque(rootViews())
         while (views.isNotEmpty()) {
             val view = views.removeFirst()
             if (view is ViewGroup) for (i in 0 until view.childCount) view.getChildAt(i)?.let(views::add)
             if (view !is RootForTest) continue
-            if (walk(view.semanticsOwner.unmergedRootSemanticsNode, false, false, id)) return true
+            if (walk(view.semanticsOwner.unmergedRootSemanticsNode, false, false, within == null, id, within)) return true
         }
         return false
     }
 
-    /** True when a node tagged [id], exposed as a resource-id, is not under a marker. */
+    /**
+     * True when a node tagged [id], exposed as a resource-id, is not under a
+     * marker — ANY such node, so hidden means every match is not drawn. With
+     * [within], only nodes below a node tagged [within] are looked at.
+     */
     @OptIn(ExperimentalComposeUiApi::class)
-    private fun walk(node: SemanticsNode, asResourceId: Boolean, markedAbove: Boolean, id: String): Boolean {
+    private fun walk(
+        node: SemanticsNode,
+        asResourceId: Boolean,
+        markedAbove: Boolean,
+        insideAbove: Boolean,
+        id: String,
+        within: String?
+    ): Boolean {
         val config = node.config
         val exposed = asResourceId ||
             config.getOrElseNullable(SemanticsPropertiesAndroid.TestTagsAsResourceId) { null } == true
         val marked = markedAbove || config.any { it.key.name == MARKER && it.value == true }
-        if (exposed && !marked && config.getOrElseNullable(SemanticsProperties.TestTag) { null } == id) return true
-        for (child in node.children) if (walk(child, exposed, marked, id)) return true
+        val tag = config.getOrElseNullable(SemanticsProperties.TestTag) { null }
+        if (insideAbove && exposed && !marked && tag == id) return true
+        val childrenInside = insideAbove || (exposed && within != null && tag == within)
+        for (child in node.children) if (walk(child, exposed, marked, childrenInside, id, within)) return true
         return false
     }
 }

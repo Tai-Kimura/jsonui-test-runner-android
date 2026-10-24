@@ -257,6 +257,9 @@ class TestLoader {
             contains = substituteArgsInString(step.contains, args),
             button = substituteArgsInString(step.button, args),
             label = substituteArgsInString(step.label, args),
+            // `within` names a cell, and the cell's index is what a case
+            // parameterises: "within": "list_item_@{row}".
+            within = substituteArgsInString(step.within, args),
             equals = substituteArgsInJsonElement(step.equals, args)
         )
     }

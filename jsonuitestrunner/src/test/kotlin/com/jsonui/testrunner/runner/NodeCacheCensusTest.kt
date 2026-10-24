@@ -78,7 +78,8 @@ class NodeCacheCensusTest {
     }
 
     private val loop = Regex("""\bwhile\s*\(|\bfor\s*\(|\brepeat\s*\(|\.poll\s*[({]""")
-    private val find = Regex("""findObjects?\(|findByViewId\(|boundsOf\(|Until\.hasObject|executeOnce\(|\bcheck\(\)""")
+    // `lookup.find(`…: ids resolve through ElementLookup (a step's `within`).
+    private val find = Regex("""findObjects?\(|findByViewId\(|boundsOf\(|Until\.hasObject|executeOnce\(|\bcheck\(\)|\blookup\.(?:find|findAll|isPresent|container)\(""")
 
     private fun waits(): Map<String, String> =
         listOf("actions", "assertions", "runner").flatMap { dir ->
@@ -115,6 +116,10 @@ class NodeCacheCensusTest {
         assertTrue(loop.containsMatchIn(planted.getValue("waitPlanted")) &&
             find.containsMatchIn(planted.getValue("waitPlanted")) &&
             !planted.getValue("waitPlanted").contains("NodeCache."))
+        // A wait that finds through ElementLookup is a wait too.
+        val viaLookup = functions(codeOnly("fun waitScoped() { deadline.poll { lookup.find(id, within) } }"))
+        assertTrue(loop.containsMatchIn(viaLookup.getValue("waitScoped")) &&
+            find.containsMatchIn(viaLookup.getValue("waitScoped")))
         assertTrue("comments are not code", !codeOnly("// NodeCache.clear()").contains("NodeCache."))
     }
 }
