@@ -54,9 +54,9 @@ object HiddenNodes {
     /**
      * Whether [id] is hidden — every node tagged [id] is not drawn (or there
      * is none); null when the semantics tree cannot be read (no Compose).
-     * With [within], only the nodes under a node tagged [within] count (a
-     * step's `within`, see ElementLookup): no such container is no node, so
-     * hidden.
+     * With [within], only the nodes under the FIRST node tagged [within]
+     * count (a step's `within`, see ElementLookup and Within.firstContainer);
+     * the caller fails a missing container before asking.
      */
     fun isHidden(id: String, within: String? = null): Boolean? {
         if (!available) return null
@@ -83,39 +83,49 @@ object HiddenNodes {
             .mapNotNull { (it as Activity).window?.decorView }
     }
 
-    private fun anyShown(id: String, within: String?): Boolean {
+    private fun semanticsRoots(): List<SemanticsNode> {
+        val roots = mutableListOf<SemanticsNode>()
         val views = ArrayDeque(rootViews())
         while (views.isNotEmpty()) {
             val view = views.removeFirst()
             if (view is ViewGroup) for (i in 0 until view.childCount) view.getChildAt(i)?.let(views::add)
-            if (view !is RootForTest) continue
-            if (walk(view.semanticsOwner.unmergedRootSemanticsNode, false, false, within == null, id, within)) return true
+            if (view is RootForTest) roots.add(view.semanticsOwner.unmergedRootSemanticsNode)
         }
-        return false
+        return roots
+    }
+
+    private data class Seen(val exposed: Boolean, val marked: Boolean)
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    private fun enter(node: SemanticsNode, above: Seen): Seen {
+        val config = node.config
+        return Seen(
+            exposed = above.exposed ||
+                config.getOrElseNullable(SemanticsPropertiesAndroid.TestTagsAsResourceId) { null } == true,
+            marked = above.marked || config.any { it.key.name == MARKER && it.value == true }
+        )
+    }
+
+    private fun tag(node: SemanticsNode): String? =
+        node.config.getOrElseNullable(SemanticsProperties.TestTag) { null }
+
+    private fun anyShown(id: String, within: String?): Boolean {
+        val roots = semanticsRoots()
+        if (within == null) return roots.any { walk(it, Seen(false, false), id) }
+        val (container, seen) = Within.firstContainer(
+            roots, Seen(false, false), { it.children }, ::enter
+        ) { node, state -> state.exposed && tag(node) == within } ?: return false
+        return container.children.any { walk(it, seen, id) }
     }
 
     /**
      * True when a node tagged [id], exposed as a resource-id, is not under a
-     * marker — ANY such node, so hidden means every match is not drawn. With
-     * [within], only nodes below a node tagged [within] are looked at.
+     * marker — ANY such node under [node], so hidden means every match is not
+     * drawn.
      */
-    @OptIn(ExperimentalComposeUiApi::class)
-    private fun walk(
-        node: SemanticsNode,
-        asResourceId: Boolean,
-        markedAbove: Boolean,
-        insideAbove: Boolean,
-        id: String,
-        within: String?
-    ): Boolean {
-        val config = node.config
-        val exposed = asResourceId ||
-            config.getOrElseNullable(SemanticsPropertiesAndroid.TestTagsAsResourceId) { null } == true
-        val marked = markedAbove || config.any { it.key.name == MARKER && it.value == true }
-        val tag = config.getOrElseNullable(SemanticsProperties.TestTag) { null }
-        if (insideAbove && exposed && !marked && tag == id) return true
-        val childrenInside = insideAbove || (exposed && within != null && tag == within)
-        for (child in node.children) if (walk(child, exposed, marked, childrenInside, id, within)) return true
-        return false
+    private fun walk(node: SemanticsNode, above: Seen, id: String): Boolean {
+        val seen = enter(node, above)
+        if (seen.exposed && !seen.marked && tag(node) == id) return true
+        return node.children.any { walk(it, seen, id) }
     }
 }

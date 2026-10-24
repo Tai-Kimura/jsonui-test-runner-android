@@ -111,4 +111,50 @@ class WithinTest {
         assertEquals("'x'", Within.label("x", null))
         assertEquals("'x' inside 'c'", Within.label("x", "c"))
     }
+
+    // -- the container a scoped semantics read looks inside ----------------
+
+    private data class Node(
+        val tag: String?,
+        val asResourceId: Boolean = false,
+        val children: List<Node> = emptyList()
+    )
+
+    private fun first(roots: List<Node>, within: String): Node? =
+        Within.firstContainer(roots, false, { it.children }, { n, above -> above || n.asResourceId }) { n, exposed ->
+            exposed && n.tag == within
+        }?.first
+
+    /** Two sections, each with an `_item_0`: the second section's badge is drawn. */
+    private val twoSections = Node(null, asResourceId = true, children = listOf(
+        Node("list_section_0", children = listOf(Node("list_item_0", children = listOf(Node("title_a"))))),
+        Node("list_section_1", children = listOf(Node("list_item_0", children = listOf(Node("title_b"), Node("badge")))))
+    ))
+
+    @Test
+    fun theFirstOfTwoContainersWithOneIdIsTaken() {
+        val container = first(listOf(twoSections), "list_item_0")
+        assertEquals(listOf("title_a"), container?.children?.map { it.tag })
+    }
+
+    @Test
+    fun theFirstContainerIsFoundInPreOrderAcrossRoots() {
+        val dialog = Node(null, asResourceId = true, children = listOf(Node("list_item_0", children = listOf(Node("in_dialog")))))
+        assertEquals(listOf("title_a"), first(listOf(twoSections, dialog), "list_item_0")?.children?.map { it.tag })
+        assertEquals(listOf("in_dialog"), first(listOf(dialog, twoSections), "list_item_0")?.children?.map { it.tag })
+    }
+
+    @Test
+    fun aContainerNotExposedAsAResourceIdIsNotOne() {
+        val hidden = Node(null, children = listOf(Node("list_item_0")))
+        assertNull(first(listOf(hidden), "list_item_0"))
+        assertNull(first(listOf(twoSections), "list_item_9"))
+    }
+
+    @Test
+    fun aMissingContainerFailsOnlyWithWithin() {
+        assertTrue(Within.missingContainerFails("list_item_9", containerFound = false))
+        assertFalse(Within.missingContainerFails("list_item_1", containerFound = true))
+        assertFalse(Within.missingContainerFails(null, containerFound = false))
+    }
 }

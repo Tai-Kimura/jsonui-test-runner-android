@@ -82,8 +82,43 @@ class ElementLookup(private val device: UiDevice) {
     }
 }
 
-/** Failure text for scoped (`within`) lookups. Pure, JVM-tested. */
+/** Failure text and decisions for scoped (`within`) lookups. Pure, JVM-tested. */
 object Within {
+
+    /**
+     * A step's or a condition's `within` names a container that is not in
+     * the tree: `visible`, `notVisible`, `hidden` and `count` fail and a
+     * condition is unmet, as on web and iOS. A cell that is not drawn would
+     * otherwise pass "this cell's badge is not shown"; to claim the cell
+     * itself is gone, `hidden` is written on the cell's id without `within`.
+     */
+    fun missingContainerFails(within: String?, containerFound: Boolean): Boolean =
+        within != null && !containerFound
+
+    /**
+     * The container a scoped semantics read looks inside: the FIRST node, in
+     * pre-order across [roots] (the order a resource-id lookup finds them,
+     * as UiDevice.findObject does), that [isContainer] accepts — with the
+     * state [enter] carried down to it (exposure as a resource-id, a hidden
+     * marker above). Only one: two sections each have an `_item_0`, and the
+     * scoped find, web and iOS all take the first.
+     */
+    fun <N, S> firstContainer(
+        roots: List<N>,
+        start: S,
+        children: (N) -> List<N>,
+        enter: (N, S) -> S,
+        isContainer: (N, S) -> Boolean
+    ): Pair<N, S>? {
+        fun visit(node: N, above: S): Pair<N, S>? {
+            val state = enter(node, above)
+            if (isContainer(node, state)) return node to state
+            for (child in children(node)) visit(child, state)?.let { return it }
+            return null
+        }
+        for (root in roots) visit(root, start)?.let { return it }
+        return null
+    }
 
     /** How an id is named in a message: `'x'`, or `'x' inside 'c'`. */
     fun label(id: String, within: String?): String =

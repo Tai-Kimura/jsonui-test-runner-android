@@ -148,6 +148,13 @@ class AssertionExecutor(
             miss + (deadline?.let { "\n" + FindTimeoutReport.render(device, id, it) } ?: "")
         } ?: elementNotFound(id, waited, deadline)
 
+    /** A `within` container that is not there fails the step, naming it. */
+    private fun failOnMissingContainer(id: String, within: String?, timeout: Long) {
+        if (com.jsonui.testrunner.runner.Within.missingContainerFails(within, within?.let { lookup.container(it) } != null)) {
+            throw AssertionError(com.jsonui.testrunner.runner.Within.containerNotFound(within!!, id, timeout))
+        }
+    }
+
     /** How a message names the element: `'x'`, or `'x' inside 'c'` with `within`. */
     private fun named(id: String, within: String?) =
         com.jsonui.testrunner.runner.Within.label(id, within)
@@ -168,8 +175,9 @@ class AssertionExecutor(
     private fun assertNotVisible(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("notVisible requires 'id'")
         // Passes as soon as the element is gone; polled from t=0 (no fixed pre-wait)
-        // With `within`, a container that is not there holds no element: met.
+        // With `within`, a container that is not there FAILS (Within.missingContainerFails).
         pollUntil(timeout, id) {
+            failOnMissingContainer(id, step.within, timeout)
             if (findElement(id, step.within) != null) {
                 throw AssertionError("Element ${named(id, step.within)} should not be visible but it is still visible after ${timeout}ms")
             }
@@ -182,11 +190,12 @@ class AssertionExecutor(
      * `hidden` fails on it — unlike `notVisible`, which is about the viewport.
      * Every element with the id counts (as on web): hidden only when none of
      * them is drawn. With `within`, only those inside the container; a
-     * container that is not there holds none, so hidden holds.
+     * container that is not there FAILS (Within.missingContainerFails).
      */
     private fun assertHidden(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("hidden requires 'id'")
         pollUntil(timeout, id) {
+            failOnMissingContainer(id, step.within, timeout)
             if (!isHidden(id, step.within)) {
                 throw AssertionError("Element ${named(id, step.within)} should be hidden but it is shown (drawn, wherever it is) after ${timeout}ms")
             }

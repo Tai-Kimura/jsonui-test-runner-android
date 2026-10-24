@@ -1056,7 +1056,11 @@ class JsonUITestRunner(
         condition.platform?.let { if (!it.includes(config.platform)) return false }
         condition.responsive?.let { if (!currentSizeMatches(it)) return false }
         // `within` scopes the three id keys (ElementLookup); a missing
-        // container finds nothing, so visible is unmet, notVisible / hidden met.
+        // container leaves all three unmet (Within.missingContainerFails).
+        if (condition.visible != null || condition.notVisible != null || condition.hidden != null) {
+            val within = condition.within
+            if (Within.missingContainerFails(within, within?.let { elementLookup.container(it) } != null)) return false
+        }
         condition.visible?.let { if (elementLookup.find(it, condition.within) == null) return false }
         condition.notVisible?.let { if (elementLookup.find(it, condition.within) != null) return false }
         condition.hidden?.let { if (!elementLookup.isHidden(it, condition.within)) return false }

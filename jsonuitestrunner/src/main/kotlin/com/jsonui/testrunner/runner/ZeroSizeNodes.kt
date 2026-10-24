@@ -50,8 +50,8 @@ object ZeroSizeNodes {
 
     /**
      * The 0-size nodes tagged [id] that are exposed as a resource-id. With
-     * [within], only those under a node tagged [within] (a step's `within`:
-     * the container's subtree, see ElementLookup).
+     * [within], only those under the FIRST node tagged [within] (a step's
+     * `within`: that container's subtree, see Within.firstContainer).
      */
     fun find(id: String, within: String? = null): List<Hit> {
         if (!available) return emptyList()
@@ -76,37 +76,47 @@ object ZeroSizeNodes {
     }
 
     private fun collect(id: String, within: String?, out: MutableList<Hit>) {
+        val roots = mutableListOf<SemanticsNode>()
         val views = ArrayDeque(rootViews())
         while (views.isNotEmpty()) {
             val view = views.removeFirst()
             if (view is ViewGroup) for (i in 0 until view.childCount) view.getChildAt(i)?.let(views::add)
-            if (view !is RootForTest) continue
-            walk(view.semanticsOwner.unmergedRootSemanticsNode, false, within == null, id, within, out)
+            if (view is RootForTest) roots.add(view.semanticsOwner.unmergedRootSemanticsNode)
         }
+        if (within == null) {
+            roots.forEach { walk(it, false, id, out) }
+            return
+        }
+        // Scoped: the first container's descendants only.
+        val (container, exposed) = Within.firstContainer(
+            roots, false, { it.children }, ::exposedAt
+        ) { node, exposedHere -> exposedHere && tagOf(node) == within } ?: return
+        container.children.forEach { walk(it, exposed, id, out) }
     }
 
     @OptIn(ExperimentalComposeUiApi::class)
+    private fun exposedAt(node: SemanticsNode, above: Boolean): Boolean =
+        above || node.config.getOrElseNullable(SemanticsPropertiesAndroid.TestTagsAsResourceId) { null } == true
+
+    private fun tagOf(node: SemanticsNode): String? =
+        node.config.getOrElseNullable(SemanticsProperties.TestTag) { null }
+
     private fun walk(
         node: SemanticsNode,
         asResourceId: Boolean,
-        insideAbove: Boolean,
         id: String,
-        within: String?,
         out: MutableList<Hit>
     ) {
         val config = node.config
-        val exposed = asResourceId ||
-            config.getOrElseNullable(SemanticsPropertiesAndroid.TestTagsAsResourceId) { null } == true
-        val tag = config.getOrElseNullable(SemanticsProperties.TestTag) { null }
+        val exposed = exposedAt(node, asResourceId)
+        val tag = tagOf(node)
         val size = node.size
-        // Unscoped: everywhere. Scoped: the container's descendants only.
-        if (insideAbove && exposed && (size.width == 0 || size.height == 0) && tag == id) {
+        if (exposed && (size.width == 0 || size.height == 0) && tag == id) {
             val text = config.getOrElseNullable(SemanticsProperties.EditableText) { null }?.text
                 ?: config.getOrElseNullable(SemanticsProperties.Text) { null }?.joinToString(" ") { it.text }
                 ?: ""
             out.add(Hit(size.width, size.height, !config.contains(SemanticsProperties.Disabled), text))
         }
-        val childrenInside = insideAbove || (exposed && within != null && tag == within)
-        for (child in node.children) walk(child, exposed, childrenInside, id, within, out)
+        for (child in node.children) walk(child, exposed, id, out)
     }
 }

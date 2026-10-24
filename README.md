@@ -183,9 +183,13 @@ are told apart:
 ```
 
 A cell exists in the tree only while it is drawn: `scrollUntilVisible` to the
-cell first. With a missing container, `visible` fails (naming the container)
-and `notVisible` / `hidden` hold; `count` counts inside the container and
-fails when it is missing. Conditions take it too:
+cell first. With a missing container, every step fails naming the container
+— `visible`, `notVisible`, `hidden` and `count` alike (a cell that is not
+drawn would otherwise pass "this cell's badge is not shown") — and a condition
+with `within` is not met. To claim that a cell itself is not shown, assert
+`hidden` on the cell's id without `within`. When two elements carry the
+container's id (two sections each have an `_item_0`), the first is the
+container, as on web and iOS. Conditions take it too:
 `"when": { "visible": "badge", "within": "rows_item_0" }`. In
 `scrollUntilVisible`, `within` scopes the target and `container` is still the
 surface that is scrolled.
