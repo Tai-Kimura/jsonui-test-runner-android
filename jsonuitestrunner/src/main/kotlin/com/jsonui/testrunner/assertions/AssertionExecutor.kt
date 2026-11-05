@@ -373,6 +373,8 @@ class AssertionExecutor(
                 throw IllegalStateException(
                     com.jsonui.testrunner.runner.StateBridge.truncatedMessage(bridge.screenId() ?: "?", outcome.bytes)
                 )
+            is com.jsonui.testrunner.runner.StateBridge.Outcome.Unreadable ->
+                throw IllegalStateException("state '$path': ${outcome.why}")
             com.jsonui.testrunner.runner.StateBridge.Outcome.Pending,
             com.jsonui.testrunner.runner.StateBridge.Outcome.Unresolved -> null
         }

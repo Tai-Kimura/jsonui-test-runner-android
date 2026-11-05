@@ -46,10 +46,7 @@ object HiddenNodes {
     const val MARKER = "JsonUIHidden"
 
     /** Whether the app under test has Compose on its classpath. */
-    val available: Boolean by lazy {
-        runCatching { Class.forName("androidx.compose.ui.node.RootForTest", false, HiddenNodes::class.java.classLoader) }
-            .isSuccess
-    }
+    val available: Boolean get() = ComposeRead.classPresent
 
     /**
      * Whether [id] is hidden — every node tagged [id] is not drawn (or there
@@ -57,19 +54,25 @@ object HiddenNodes {
      * With [within], only the nodes under the FIRST node tagged [within]
      * count (a step's `within`, see ElementLookup and Within.firstContainer);
      * the caller fails a missing container before asking.
+     *
+     * Throws [ComposeRead.ApiGone] when R8 removed what this calls: the
+     * caller's other answer ("no element by resource-id") calls a node scrolled
+     * off screen hidden, and a test would pass on it.
      */
     fun isHidden(id: String, within: String? = null): Boolean? {
         if (!available) return null
         var shown = false
         var read = false
+        var gone: LinkageError? = null
         runCatching {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 runCatching {
                     shown = anyShown(id, within)
                     read = true
-                }
+                }.onFailure { if (it is LinkageError) gone = it }
             }
         }
+        gone?.let { throw ComposeRead.ApiGone(ComposeRead.message(it)) }
         return if (read) !shown else null
     }
 

@@ -860,7 +860,8 @@ class JsonUITestRunner(
     /** Where execution is, for a failure message that can name the step. */
     private val stepTrail = StepTrail()
 
-    private fun describeFailure(t: Throwable): String = stepTrail.describe(t)
+    private fun describeFailure(t: Throwable): String =
+        stepTrail.describe(t).let { if (ComposeRead.KEEP_ARTIFACT in it) it else it + ComposeRead.note() }
 
     private fun runTestCase(testName: String, testCase: TestCase): TestResult {
         val startTime = System.currentTimeMillis()

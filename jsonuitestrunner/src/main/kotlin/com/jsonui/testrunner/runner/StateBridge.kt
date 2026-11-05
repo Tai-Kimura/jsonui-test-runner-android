@@ -50,6 +50,8 @@ object StateBridge {
         /** A value that is not a bridge (no `data`). */
         data object Malformed : Reading
         data class Bridge(val launchId: String?, val receipt: Receipt?, val data: JsonObject) : Reading
+        /** The read itself could not run: R8 removed what it calls ([ComposeRead]). Waiting does not bring it back. */
+        data class Unreadable(val why: String) : Reading
     }
 
     private val json = Json { isLenient = false }
@@ -121,6 +123,8 @@ object StateBridge {
         data object Pending : Outcome
         /** Fail at once. */
         data class Truncated(val bytes: Int) : Outcome
+        /** Fail at once. */
+        data class Unreadable(val why: String) : Outcome
         data class Value(val value: JsonElement) : Outcome
         /** The bridge is there and the path does not resolve (yet). */
         data object Unresolved : Outcome
@@ -129,6 +133,7 @@ object StateBridge {
     fun outcome(reading: Reading, path: String): Outcome = when (reading) {
         Reading.Absent, Reading.Malformed -> Outcome.Pending
         is Reading.Truncated -> Outcome.Truncated(reading.bytes)
+        is Reading.Unreadable -> Outcome.Unreadable(reading.why)
         is Reading.Bridge -> when (val r = resolve(path, reading.data)) {
             is PathResult.Value -> Outcome.Value(r.value)
             PathResult.Unresolved -> Outcome.Unresolved
@@ -159,11 +164,13 @@ object StateBridge {
         data object Confirmed : ReceiptState
         data class Rejected(val rejections: List<Rejection>) : ReceiptState
         data class Truncated(val bytes: Int) : ReceiptState
+        data class Unreadable(val why: String) : ReceiptState
     }
 
     /** Whether the screen confirmed the payload of launch [launchId]. */
     fun receipt(reading: Reading, launchId: String): ReceiptState = when (reading) {
         is Reading.Truncated -> ReceiptState.Truncated(reading.bytes)
+        is Reading.Unreadable -> ReceiptState.Unreadable(reading.why)
         is Reading.Bridge -> {
             val receipt = reading.receipt
             if (reading.launchId != launchId || receipt == null) ReceiptState.Waiting
@@ -193,6 +200,7 @@ object StateBridge {
             when (val state = receipt(last, launchId)) {
                 ReceiptState.Confirmed -> return
                 is ReceiptState.Rejected -> throw InitialStateNotConfirmedException(rejectedMessage(screenId, state.rejections))
+                is ReceiptState.Unreadable -> throw InitialStateNotConfirmedException("initialState for '$screenId' cannot be confirmed: ${state.why}")
                 is ReceiptState.Truncated, ReceiptState.Waiting -> Unit
             }
             if (now() >= deadline) throw InitialStateNotConfirmedException(noReceiptMessage(screenId, timeoutMs, last))
@@ -206,6 +214,7 @@ object StateBridge {
             Reading.Absent -> "no screen marker '$MARKER_PREFIX$screenId' carrying the state bridge was found"
             Reading.Malformed -> "the state bridge on '$MARKER_PREFIX$screenId' could not be read"
             is Reading.Truncated -> "the state bridge is ${lastReading.bytes} bytes and was truncated"
+            is Reading.Unreadable -> lastReading.why
             is Reading.Bridge -> "the state bridge shows launch ${lastReading.launchId ?: "null"} without a receipt for this launch"
         }
         return "initialState for '$screenId' was not confirmed by the app within ${timeoutMs}ms ($seen). " +
@@ -250,11 +259,14 @@ object StateBridgeReader {
     fun read(screenId: String): StateBridge.Reading {
         if (!HiddenNodes.available) return StateBridge.Reading.Absent
         var value: String? = null
+        var gone: LinkageError? = null
         runCatching {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 runCatching { value = findBridge("${StateBridge.MARKER_PREFIX}$screenId") }
+                    .onFailure { if (it is LinkageError) gone = it }
             }
         }
+        gone?.let { return StateBridge.Reading.Unreadable(ComposeRead.message(it)) }
         return StateBridge.parse(value)
     }
 

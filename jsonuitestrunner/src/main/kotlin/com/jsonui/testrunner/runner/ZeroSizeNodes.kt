@@ -43,15 +43,17 @@ object ZeroSizeNodes {
     data class Hit(val width: Int, val height: Int, val enabled: Boolean, val text: String)
 
     /** Whether the app under test has Compose on its classpath. */
-    val available: Boolean by lazy {
-        runCatching { Class.forName("androidx.compose.ui.node.RootForTest", false, ZeroSizeNodes::class.java.classLoader) }
-            .isSuccess
-    }
+    val available: Boolean get() = ComposeRead.classPresent
 
     /**
      * The 0-size nodes tagged [id] that are exposed as a resource-id. With
      * [within], only those under the FIRST node tagged [within] (a step's
      * `within`: that container's subtree, see Within.firstContainer).
+     *
+     * Asked after every By.res miss, also while an element has yet to appear:
+     * when R8 removed what this calls it stays a miss, and the failure, if one
+     * comes, says why ([ComposeRead.note]). A step that finds its element by
+     * resource-id goes on as before.
      */
     fun find(id: String, within: String? = null): List<Hit> {
         if (!available) return emptyList()
@@ -59,6 +61,7 @@ object ZeroSizeNodes {
         runCatching {
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 runCatching { collect(id, within, hits) }
+                    .onFailure { if (it is LinkageError) ComposeRead.saw(ComposeRead.message(it)) }
             }
         }
         return hits

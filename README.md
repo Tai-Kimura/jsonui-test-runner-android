@@ -221,6 +221,21 @@ test publishes on its marker (in a flow, the screen the step names). A
 `ViewModelStateProvider` set on the runner still wins. `equals: null`
 matches a field that holds null.
 
+## A minified (R8) build type
+
+The test APK takes Compose, Kotlin and its runner's libraries from the app's process, and R8 removes from the app what the app itself does not call. On a build type the tests run on with R8 on, add this artifact, for that build type only:
+
+```kotlin
+dependencies {
+    // the same version as the driver; uiTestRelease is your build type
+    "uiTestReleaseImplementation"("io.github.tai-kimura:jsonui-test-runner-android-keep:1.21.0")
+}
+```
+
+It holds no code, only the keep rules, so they reach that build's R8 and not the one that ships. The driver cannot carry them: an `androidTest` dependency's consumer rules reach the test APK's R8 only.
+
+Without it: the runner dies before the first test (`NoClassDefFoundError: androidx.tracing.Trace`) unless your own rules keep what it takes. With those but without the Compose rules, `initialState`, `state` and `hidden` fail, naming this artifact, and an element with a 0 x 0 box is not found, the failure naming it too. The rules cover what a Compose app reads; the build type itself is in KotlinJsonUI's `Docs/ui-tests-on-release-builds.md`.
+
 ## Element Identification
 
 Elements are identified using `contentDescription` (accessibility label). Make sure your views have proper content descriptions:

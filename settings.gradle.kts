@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "jsonui-test-runner-android"
 include(":jsonuitestrunner")
+include(":jsonuitestrunner-keep")
