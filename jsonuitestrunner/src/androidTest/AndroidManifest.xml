@@ -22,6 +22,11 @@
         <activity
             android:name="com.jsonui.testrunner.actions.FormFooterProbeActivity"
             android:exported="false" />
+        <!-- ScreenMarkerProbeActivity: screen markers shown on demand, started
+             explicitly by ScreenVerdictOnDeviceTest; not a launcher target. -->
+        <activity
+            android:name="com.jsonui.testrunner.assertions.ScreenMarkerProbeActivity"
+            android:exported="false" />
         <!-- SwipeEdgeProbeActivity: a full-screen surface the swipe-edge test
              swipes across; not a launcher target. -->
         <activity
