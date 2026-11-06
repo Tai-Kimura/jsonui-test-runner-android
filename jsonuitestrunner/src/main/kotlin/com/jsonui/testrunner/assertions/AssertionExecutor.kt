@@ -71,6 +71,9 @@ class AssertionExecutor(
     /** Sink for non-fatal warnings (e.g. "baseline created"), set by the runner */
     var warningHandler: ((String) -> Unit)? = null
 
+    /** The test seam: runs between a screen's last look and the read after it (ScreenVerdictOnDeviceTest). */
+    internal var beforeLastRead: () -> Unit = {}
+
     /**
      * Execute an assertion step
      */
@@ -121,8 +124,20 @@ class AssertionExecutor(
                 ?: ZeroSizeNodes.find(marker).firstOrNull()
                     ?.takeIf { ScreenMarker.presentMarkers(device).none { other -> other != screenId } }
         }?.let { return }
+        // One read for the verdict and the sentence. Taken apart, a screen that
+        // came after the last look read "'x' is not displayed; displayed screens
+        // are [x]" (a consumer's run at load 70). The wanted marker in this read
+        // is the screen displayed, by the poll's own predicate; any other marker
+        // leaves it a failure, so this forgives no wrong screen.
+        beforeLastRead()
+        NodeCache.clearBeforeRetry()
+        val present = ScreenMarker.presentMarkers(device)
+        if (screenId in present) {
+            warningHandler?.invoke("screen '$screenId' came on the last read, after the budget: ${deadline.describe()}")
+            return
+        }
         val appPackage = InstrumentationRegistry.getInstrumentation().targetContext.packageName
-        throw AssertionError(ScreenMarker.diagnosis(device, screenId, appPackage) + "\n  " + deadline.describe())
+        throw AssertionError(ScreenMarker.diagnosis(device, screenId, present, appPackage) + "\n  " + deadline.describe())
     }
 
     /**

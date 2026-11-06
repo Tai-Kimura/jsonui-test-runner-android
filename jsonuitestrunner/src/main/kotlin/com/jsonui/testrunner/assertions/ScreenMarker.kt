@@ -27,9 +27,11 @@ object ScreenMarker {
      * code is not the suspect — pointing at `jui build` there sends the
      * reader away from the cause. Only when the app under test IS foreground
      * does the stale-build hint apply.
+     *
+     * [present] is the read the verdict came from: read again here, it can hold
+     * a screen the verdict did not see.
      */
-    fun diagnosis(device: UiDevice, screenId: String, appPackage: String? = null): String {
-        val present = presentMarkers(device)
+    fun diagnosis(device: UiDevice, screenId: String, present: List<String>, appPackage: String? = null): String {
         if (present.isNotEmpty()) {
             return "previous-screen-only: '$screenId' is not displayed; displayed screens are $present"
         }
