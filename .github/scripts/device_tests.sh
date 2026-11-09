@@ -16,8 +16,9 @@ adb logcat -c || true
 adb logcat -v threadtime > "$out/logcat.txt" 2>&1 &
 logcat_pid=$!
 start=$(date +%s)
-./gradlew --no-daemon --stacktrace :jsonuitestrunner:connectedDebugAndroidTest
+# compose-probe: the arms that need a Compose screen (its own app; see its build file).
+./gradlew --no-daemon --stacktrace :jsonuitestrunner:connectedDebugAndroidTest :compose-probe:connectedDebugAndroidTest
 rc=$?
-echo "connectedDebugAndroidTest rc=$rc in $(( $(date +%s) - start ))s" | tee -a "$out/device.txt"
+echo "connectedDebugAndroidTest (driver + compose-probe) rc=$rc in $(( $(date +%s) - start ))s" | tee -a "$out/device.txt"
 kill "$logcat_pid" 2>/dev/null || true
 exit "$rc"

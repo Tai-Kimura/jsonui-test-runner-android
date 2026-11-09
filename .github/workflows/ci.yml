@@ -90,7 +90,7 @@ jobs:
           script: bash .github/scripts/device_tests.sh
       - name: Judge the on-device tests from their XML
         if: always()
-        run: python3 .github/scripts/junit_gate.py on-device jsonuitestrunner/build/outputs/androidTest-results
+        run: python3 .github/scripts/junit_gate.py on-device jsonuitestrunner/build/outputs/androidTest-results compose-probe/build/outputs/androidTest-results
       - name: Upload on-device results
         if: always()
         uses: actions/upload-artifact@v4
@@ -100,4 +100,6 @@ jobs:
           path: |
             jsonuitestrunner/build/outputs/androidTest-results/
             jsonuitestrunner/build/reports/androidTests/
+            compose-probe/build/outputs/androidTest-results/
+            compose-probe/build/reports/androidTests/
             device-evidence/

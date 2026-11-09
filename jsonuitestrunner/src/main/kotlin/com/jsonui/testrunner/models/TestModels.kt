@@ -157,6 +157,12 @@ data class FlowTestStep(
     val within: String? = null,
     val container: String? = null,
     val variable: String? = null,
+    /** setSliderValue / the value assertion: [minimum, maximum] as the layout declares it */
+    val range: List<Double>? = null,
+    /** setSliderValue / the value assertion: the slider's step (the grid min + k * step) */
+    val step: Double? = null,
+    /** The value assertion: the largest accepted difference (default 1e-6 here) */
+    val tolerance: Double? = null,
     val times: Int? = null,
     /** Target orientation for the setOrientation action ("portrait" | "landscape") */
     val orientation: String? = null,
@@ -237,6 +243,12 @@ data class TestStep(
     val within: String? = null,
     val container: String? = null,
     val variable: String? = null,
+    /** setSliderValue / the value assertion: [minimum, maximum] as the layout declares it */
+    val range: List<Double>? = null,
+    /** setSliderValue / the value assertion: the slider's step (the grid min + k * step) */
+    val step: Double? = null,
+    /** The value assertion: the largest accepted difference (default 1e-6 here) */
+    val tolerance: Double? = null,
     val times: Int? = null,
     /** Target orientation for the setOrientation action ("portrait" | "landscape") */
     val orientation: String? = null,

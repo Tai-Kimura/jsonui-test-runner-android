@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An app with no launcher: Compose screens the driver's Compose-only arms
+     run against (SetSliderValueOnDeviceTest), started by explicit intent. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="compose-probe">
+        <activity
+            android:name="com.jsonui.testrunner.composeprobe.SliderProbeActivity"
+            android:exported="false" />
+    </application>
+</manifest>

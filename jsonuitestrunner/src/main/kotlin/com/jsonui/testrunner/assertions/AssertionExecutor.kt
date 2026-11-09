@@ -89,6 +89,7 @@ class AssertionExecutor(
             "disabled" -> assertDisabled(step, timeout)
             "text" -> assertText(step, timeout)
             "count" -> assertCount(step, timeout)
+            "value" -> assertValue(step, timeout)
             "state" -> assertState(step, timeout)
             "screenshot" -> assertScreenshot(step, timeout)
             "screen" -> assertScreen(step, step.timeout?.toLong() ?: screenTransitionTimeout)
@@ -345,6 +346,37 @@ class AssertionExecutor(
                 throw AssertionError(
                     "Expected $expected elements with id '$id'" +
                         (within?.let { " inside '$it'" } ?: "") + ", but found $actualCount"
+                )
+            }
+        }
+    }
+
+    /**
+     * The slider's value, read from its accessibility RangeInfo (refreshed:
+     * SliderNodes), within `tolerance` (default 1e-6) of `equals`.
+     */
+    private fun assertValue(step: TestStep, timeout: Long) {
+        val id = step.id ?: throw IllegalArgumentException("value requires 'id'")
+        val expected = (step.equals as? JsonPrimitive)?.doubleOrNull
+            ?: throw IllegalArgumentException("value requires 'equals' with a number")
+        val tolerance = step.tolerance ?: 1e-6
+        val within = step.within
+        pollUntil(timeout, id) {
+            if (within != null && lookup.container(within) == null) {
+                throw AssertionError(com.jsonui.testrunner.runner.Within.containerNotFound(within, id, timeout))
+            }
+            val reading = com.jsonui.testrunner.runner.SliderNodes.read(id, within)
+                ?: throw AssertionError(
+                    if (com.jsonui.testrunner.runner.SliderNodes.anyWithId(id, within))
+                        "'$id' has no value to read: it is not a slider (no accessibility range)"
+                    else "Element '$id'" + (within?.let { " inside '$it'" } ?: "") + " not found"
+                )
+            if (kotlin.math.abs(reading.current - expected) > tolerance) {
+                throw AssertionError(
+                    "Expected value ${com.jsonui.testrunner.actions.SliderPlan.fmt(expected)}" +
+                        " (tolerance ${com.jsonui.testrunner.actions.SliderPlan.fmt(tolerance)}) but the slider '$id'" +
+                        (within?.let { " inside '$it'" } ?: "") +
+                        " is at ${com.jsonui.testrunner.actions.SliderPlan.fmt(reading.current)}"
                 )
             }
         }

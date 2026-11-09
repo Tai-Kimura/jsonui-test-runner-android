@@ -24,6 +24,7 @@ import com.jsonui.testrunner.runner.FindTimeoutReport
 import com.jsonui.testrunner.runner.ScrollHistory
 import com.jsonui.testrunner.runner.StableScreenshot
 import com.jsonui.testrunner.runner.NodeCache
+import com.jsonui.testrunner.runner.SliderNodes
 import com.jsonui.testrunner.runner.ProjectionProbe
 import java.io.File
 
@@ -152,6 +153,7 @@ class ActionExecutor(
             "tapItem" -> executeTapItem(step, timeout)
             "selectTab" -> executeSelectTab(step, timeout)
             "readText" -> executeReadText(step, timeout)
+            "setSliderValue" -> executeSetSliderValue(step, timeout)
             "setLocation" -> executeSetLocation(step)
             "addMedia" -> executeAddMedia(step)
             // setViewport is web-only by design (an Android window cannot be
@@ -1067,12 +1069,66 @@ class ActionExecutor(
         // Read as iOS reads it (value, else label): a 0 x 0 element reads its
         // semantics text (ZeroSizeNodes), "" when it has none.
         val deadline = Deadline.of(timeout)
+        // A slider reads as its value (RangeInfo.current, refreshed): its
+        // text and content description are null, so it read "" before 1.22.0.
         val text = deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
-            lookup.find(id, step.within)?.let { it.text ?: "" } ?: lookup.zeroSize(id, step.within).firstOrNull()?.text
+            val found = lookup.find(id, step.within)
+            val slider = if (found != null && found.text.isNullOrEmpty()) SliderNodes.read(id, step.within) else null
+            slider?.let { SliderPlan.fmt(it.current) }
+                ?: found?.let { it.text ?: "" }
+                ?: lookup.zeroSize(id, step.within).firstOrNull()?.text
         } ?: throw AssertionError(notFoundMessage(id, timeout, deadline, step.within))
         val store = variableStore
             ?: throw IllegalStateException("readText requires a variable store (set ActionExecutor.variableStore)")
         store[variable] = text
+    }
+
+    /**
+     * Put a slider at `value` (its own units) through the accessibility
+     * SET_PROGRESS action, the way TalkBack moves one: one onValueChange and
+     * one onValueChangeFinished, as a user's release (measured 2026-11-09,
+     * Material3 Slider). The value is refused before anything moves when it is
+     * outside the slider's bounds or off the declared step grid, or when the
+     * declared range is not the slider's (SliderPlan): the action itself
+     * would clamp or snap in silence. What the slider reads afterwards is
+     * checked — a slider with steps snaps an off-step value to the nearest
+     * step, and Android's RangeInfo does not say what the steps are.
+     */
+    private fun executeSetSliderValue(step: TestStep, timeout: Long) {
+        val id = step.id ?: throw IllegalArgumentException("setSliderValue requires 'id'")
+        val value = step.value?.toDoubleOrNull()
+            ?: throw IllegalArgumentException("setSliderValue requires 'value' as a number, got ${step.value}")
+        val deadline = Deadline.of(timeout)
+        val reading = deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) { SliderNodes.read(id, step.within) }
+            ?: throw AssertionError(
+                if (SliderNodes.anyWithId(id, step.within)) "setSliderValue '$id': the element is not a slider (no accessibility range)"
+                else notFoundMessage(id, timeout, deadline, step.within)
+            )
+        SliderPlan.refusal(id, value, reading.min, reading.max, step.range, step.step)?.let { throw AssertionError(it) }
+        if (SliderPlan.same(reading.current, value, reading.max - reading.min)) return
+        val args = android.os.Bundle().apply {
+            putFloat(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, value.toFloat())
+        }
+        val acted = reading.node.performAction(android.R.id.accessibilityActionSetProgress, args)
+        device.waitForIdle(1000)
+        // Compose publishes the new semantics a little after the change
+        // (measured: a read straight after waitForIdle still held the old
+        // value now and then), so the read-back waits for the value to arrive
+        // and judges the last reading it got.
+        val settle = Deadline.of(2000)
+        var after = SliderNodes.read(id, step.within)
+        while (after != null && !SliderPlan.same(after.current, value, after.max - after.min) && !settle.expired()) {
+            Thread.sleep(100)
+            after = SliderNodes.read(id, step.within)
+        }
+        if (after == null) throw AssertionError("setSliderValue '$id': the slider was gone after the value was set")
+        if (!acted && !SliderPlan.same(after.current, value, after.max - after.min)) {
+            throw AssertionError(
+                "setSliderValue '$id': the slider refused the value ${SliderPlan.fmt(value)}" +
+                    " (it is at ${SliderPlan.fmt(after.current)}; disabled?)"
+            )
+        }
+        SliderPlan.landedRefusal(id, value, after.current, after.min, after.max)?.let { throw AssertionError(it) }
     }
 
     private fun executeSetLocation(step: TestStep) {

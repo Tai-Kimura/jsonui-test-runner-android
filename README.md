@@ -145,6 +145,7 @@ Test files use JSON format with `.test.json` extension.
 | wait | ms | - | Wait duration |
 | back | - | - | Navigate back |
 | screenshot | name | - | Take screenshot |
+| setSliderValue | id, value | range, step, within, timeout | Put a Slider at a value in its own units (1.22.0+, see below) |
 
 **Direction values:** `up`, `down`, `left`, `right`
 
@@ -167,6 +168,26 @@ previous stop.
 | text | id | equals, contains, timeout | Text matches |
 | count | id, equals | timeout | Element count |
 | state | path, equals | timeout | A value of the screen's Data (see below) |
+| value | id, equals | tolerance, within, timeout | A Slider's value (1.22.0+, see below) |
+
+## Sliders: `setSliderValue` and `value` (1.22.0+)
+
+`{"action": "setSliderValue", "id": "rating", "value": 9}` puts a Compose
+Slider at 9 through the accessibility SET_PROGRESS action, as TalkBack does:
+one `onValueChange` and one `onValueChangeFinished`, and the slider holds the
+number exactly. Before anything moves the value is checked against the
+slider's own bounds (its RangeInfo): outside them the step fails naming the
+bound, and with `step` given a value off the grid `min + k * step` fails
+naming the two nearest values. A `range` that is not the slider's fails naming
+the slider's own. Left to the action, Android would clamp an out-of-range
+value and snap an off-step one in silence. The steps of a slider are not
+readable, so without `step` an off-step value fails after the fact, naming the
+step it landed on.
+
+`{"assert": "value", "id": "rating", "equals": 9}` reads the slider's value
+(within `tolerance`, default 1e-6), and `readText` reads it as text ("9",
+"-2.5"). To check what the app keeps or sends, assert `state` on the bound
+data.
 
 ## `within`: an id inside one element
 

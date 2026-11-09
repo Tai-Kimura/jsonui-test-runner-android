@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 rootProject.name = "jsonui-test-runner-android"
 include(":jsonuitestrunner")
 include(":jsonuitestrunner-keep")
+// Not published: Compose screens for the on-device arms that need one.
+include(":compose-probe")
