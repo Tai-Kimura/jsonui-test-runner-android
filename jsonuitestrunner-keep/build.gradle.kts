@@ -31,7 +31,7 @@ mavenPublishing {
     signAllPublications()
 
     // The driver's version: KeepRulesTest holds the two together.
-    coordinates("io.github.tai-kimura", "jsonui-test-runner-android-keep", "1.21.1")
+    coordinates("io.github.tai-kimura", "jsonui-test-runner-android-keep", "1.22.0")
 
     pom {
         name.set("JsonUI Test Runner (Android): keep rules")
