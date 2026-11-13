@@ -47,10 +47,22 @@ object ScreenMarker {
             "rebuild with `jui build`. (Markers are debug-build only.)"
     }
 
-    /** Screen ids whose markers are currently findable. */
+    /**
+     * Screen ids whose markers are currently findable. A marker found and gone
+     * before its name is read (its node stale) is a screen leaving: it is not
+     * displayed, so it is skipped. Read as it was, the stale node threw out of
+     * `assert screen` while the screen changed (docs/bugs 2026-11-13
+     * android-driver-screen-assert-stale-marker).
+     */
     internal fun presentMarkers(device: UiDevice): List<String> =
         device.findObjects(By.res(java.util.regex.Pattern.compile("\\Q$PREFIX\\E.*")))
-            .mapNotNull { it.resourceName }
+            .mapNotNull { node ->
+                try {
+                    node.resourceName
+                } catch (e: androidx.test.uiautomator.StaleObjectException) {
+                    null
+                }
+            }
             .filter { it.startsWith(PREFIX) }
             .map { it.removePrefix(PREFIX) }
             .distinct()
