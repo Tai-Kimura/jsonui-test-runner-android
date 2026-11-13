@@ -66,7 +66,7 @@ class MoveItemPlanVectorsTest {
     @Test
     fun `every verify case says scrolled as the vectors say`() {
         val cases = doc.getValue("verify").jsonArray.map { it.jsonObject }
-        assertEquals(5, cases.size)
+        assertEquals(7, cases.size)
         for (c in cases) {
             val name = c.getValue("name").jsonPrimitive.content
             val before = box(c.getValue("before").jsonArray)
