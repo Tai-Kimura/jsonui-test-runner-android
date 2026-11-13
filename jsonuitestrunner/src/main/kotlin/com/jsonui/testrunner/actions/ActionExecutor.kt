@@ -593,7 +593,7 @@ class ActionExecutor(
                     NodeCache.clear()
                     val after = MoveItemNodes.items(prefix, step.within)[witness].orEmpty().singleOrNull()
                         ?.let { MoveItemNodes.box(it, density) }
-                    if (after == null || MoveItemPlan.scrolled(before, after)) {
+                    if (MoveItemPlan.scrolled(before, after)) {
                         throw AssertionError(MoveItemPlan.scrolledSentence("$prefix$witness", before, after))
                     }
                 }

@@ -131,9 +131,12 @@ object MoveItemPlan {
         return listOf(lo - 1, hi + 1, lo - 2, hi + 2).firstOrNull { n -> n >= 0 && found[n]?.let { visible.contains(it) } == true }
     }
 
-    /** Whether the witness row moved by more than 1: the list scrolled under the finger. */
-    fun scrolled(before: Box, after: Box): Boolean =
-        kotlin.math.abs(after.y - before.y) > 1.0 || kotlin.math.abs(after.x - before.x) > 1.0
+    /**
+     * Whether the witness row moved by more than 1, or is no longer found ([after] null: a lazy list scrolled it
+     * away): the list scrolled under the finger.
+     */
+    fun scrolled(before: Box, after: Box?): Boolean =
+        after == null || kotlin.math.abs(after.y - before.y) > 1.0 || kotlin.math.abs(after.x - before.x) > 1.0
 
     /**
      * The sentence of a scroll during the drag. [after] null: the witness row is gone from the tree after the gesture

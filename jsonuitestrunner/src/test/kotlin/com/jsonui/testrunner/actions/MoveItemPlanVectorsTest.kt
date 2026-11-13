@@ -66,13 +66,15 @@ class MoveItemPlanVectorsTest {
     @Test
     fun `every verify case says scrolled as the vectors say`() {
         val cases = doc.getValue("verify").jsonArray.map { it.jsonObject }
-        assertEquals(4, cases.size)
+        assertEquals(5, cases.size)
         for (c in cases) {
-            assertEquals(
-                c.getValue("name").jsonPrimitive.content,
-                c.getValue("scrolled").jsonPrimitive.boolean,
-                MoveItemPlan.scrolled(box(c.getValue("before").jsonArray), box(c.getValue("after").jsonArray))
-            )
+            val name = c.getValue("name").jsonPrimitive.content
+            val before = box(c.getValue("before").jsonArray)
+            val after = c.getValue("after").let { if (it is JsonNull) null else box(it.jsonArray) }
+            assertEquals(name, c.getValue("scrolled").jsonPrimitive.boolean, MoveItemPlan.scrolled(before, after))
+            // offScreen: the sentence says the row moved off the screen, not by how much.
+            val offScreen = c["offScreen"]?.jsonPrimitive?.boolean ?: false
+            assertEquals(name, offScreen, MoveItemPlan.scrolledSentence("list_item_7", before, after).contains("('list_item_7' moved off the screen)"))
         }
     }
 
