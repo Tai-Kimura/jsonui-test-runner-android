@@ -204,16 +204,25 @@ that row's height going down, 1/4 going up — never on a centre. `to` is the
 row's index after the move (onReorder's `to`). The touches are injected
 through UiAutomation, so the long press, the slow drag and the hold are real.
 
-Nothing moves, and the step fails naming the row, when: `from` equals `to`;
-`section` is not 0 (v1 moves within one section); the row's address is more
-than one element (a Collection of several sections); a row is not found (a
-lazy row out of view is not composed, so it is "not found" here); a row is not
-wholly inside the screen and inside the list that scrolls it; the press or the
-release is within 100 dp of the screen's top or bottom, or within 56 dp of the
-list's (KotlinJsonUI's own auto-scroll band is 48 dp from the edges of a list
-that scrolls itself: a finger held there scrolls the list and the row lands
-further); or `handle` is given and not found inside the row. Scroll the rows
-towards the middle first; the drag does not scroll.
+Positions are planned in dp (the screen's pixels divided by the density), so
+the margins below are the same distance under the finger as iOS's points and
+the web's CSS pixels. Nothing moves, and the step fails naming the row, when:
+`from` equals `to`; `section` is not 0 (v1 moves within one section); the
+row's address is more than one element (a Collection of several sections); a
+row is not found (a lazy row out of view is not composed, so it is "not
+found" here); a row is not wholly inside the screen and the visible part of
+the list that scrolls it (Compose clips a row's bounds only at the window, so
+a row ending exactly at the window's edge is taken as cut); the press or the
+release is within 100 dp of the screen's top or bottom or within 56 dp of the
+list's — on a side only while the list can still scroll that way (read
+exactly from the list's scroll actions: a list at its top lets row 0 move);
+or `handle` is given and not found inside the row. Scroll the rows towards the
+middle first; the drag does not scroll.
+
+After the gesture, a row outside the moved range that was wholly on screen
+must be where it was (within 1 dp); when it is not, the list scrolled under
+the finger and the step fails saying so, rather than leaving the row
+somewhere else in silence.
 
 The step only moves the row: assert its result with the steps that follow (the
 rows' text, or `state`). Where the press and the release are, and the failures

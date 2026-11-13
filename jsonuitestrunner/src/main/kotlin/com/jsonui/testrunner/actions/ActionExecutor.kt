@@ -523,11 +523,18 @@ class ActionExecutor(
     /**
      * moveItem (schemas moveItemAction): a reorderable Collection's row pressed 1.0 s (on its handle when the step
      * gives one), dragged slowly, held 0.5 s and released over the to row (MoveItemPlan, by the shared vectors
-     * specs/vectors/move-item.json). Nothing moves when the plan fails; the failure names the row.
+     * specs/vectors/move-item.json, planned in dp). Nothing moves when the plan fails; the failure names the row.
+     * After the gesture a row outside the moved range must be where it was: else the list scrolled under the finger
+     * and the step fails saying so.
+     *
+     * The list is the from row's nearest scrollable ancestor. Compose clips a node's bounds to the window only, so a
+     * row a list draws half under its own edge has bounds past the list's, and a lazy row out of view is not in the
+     * tree at all (missing, not offscreen). Whether the list can still scroll up or down is read from its scroll
+     * actions, exactly (MoveItemNodes.canScroll); the check after the gesture is what catches a scroll all the same.
      *
      * The finger is injected as touch events through UiAutomation: uiautomator's own drag presses for a fixed
      * moment and lets go as soon as it arrives, where the libraries' drag needs a long press first and a release
-     * that has stood still over the row. The edge margin is 100 dp on the device (MoveItemPlan.edgeMarginPx).
+     * that has stood still over the row.
      */
     private fun executeMoveItem(step: TestStep, timeout: Long) {
         val id = step.id ?: throw IllegalArgumentException("moveItem requires 'id'")
@@ -537,34 +544,59 @@ class ActionExecutor(
         val fail = { reason: String -> AssertionError(MoveItemPlan.sentence(reason, from, step.handle)) }
         MoveItemPlan.early(from, to, section)?.let { throw fail(it) }
 
-        val addresses = listOf("${id}_item_$from", "${id}_item_$to")
+        val prefix = "${id}_item_"
         // Both rows are waited for within the step's timeout; one still absent is named by the plan.
         val deadline = Deadline.of(timeout)
         val nodes = deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
-            MoveItemNodes.rows(addresses, step.within).takeIf { found -> addresses.all { found[it].orEmpty().isNotEmpty() } }
-        } ?: MoveItemNodes.rows(addresses, step.within)
-        val handle = step.handle?.let { grip ->
-            MoveItemPlan.Handle.Given(nodes[addresses[0]].orEmpty().singleOrNull()?.let { MoveItemNodes.handle(it, grip) })
-        } ?: MoveItemPlan.Handle.None
+            MoveItemNodes.items(prefix, step.within).takeIf { found -> found.containsKey(from) && found.containsKey(to) }
+        } ?: MoveItemNodes.items(prefix, step.within)
+
+        val density = android.content.res.Resources.getSystem().displayMetrics.density.toDouble()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val window = AppWindow.rootBounds(instrumentation) ?: Rect(0, 0, device.displayWidth, device.displayHeight)
         val screen = MoveItemPlan.Box(
             window.left.toDouble(), window.top.toDouble(), window.width().toDouble(), window.height().toDouble()
-        )
-        // The list that scrolls the rows: Compose clips a row's bounds to the window only, so a row the list draws
-        // half under its own edge is told by the list's bounds (MoveItemPlan.planOnDevice).
-        val list = nodes[addresses[0]].orEmpty().singleOrNull()?.let { MoveItemNodes.scrollContainer(it) }
-        val density = android.content.res.Resources.getSystem().displayMetrics.density
-        when (val plan = MoveItemPlan.planOnDevice(
-            id, from, to, section, screen, list, MoveItemNodes.boxes(nodes), handle,
-            screenMargin = MoveItemPlan.edgeMarginPx(density), listMargin = MoveItemPlan.LIST_MARGIN_DP * density
-        )) {
+        ).div(density)
+        val fromNode = nodes[from].orEmpty().singleOrNull()
+        val listNode = fromNode?.let { MoveItemNodes.scrollNode(it) }
+        val list = listNode?.let { MoveItemNodes.box(it, density) }
+        val visible = list?.let { MoveItemPlan.intersect(screen, it) } ?: screen
+        // Compose clips a node's bounds to the window: a row the window cuts reads as a shorter row ending exactly at
+        // the window's edge, wholly inside it (measured: a lazy row cut at the screen's bottom made canScrollDown
+        // false, the move went, and the list scrolled under the finger). A row ending at the window's edge is taken
+        // as running past it.
+        val rows = nodes.entries.associate { (n, list) ->
+            "$prefix$n" to list.map { MoveItemPlan.pastWindowEdge(MoveItemNodes.box(it, density), screen) }
+        }
+        val found = rows.entries.mapNotNull { (address, boxes) ->
+            boxes.singleOrNull()?.let { address.removePrefix(prefix).toInt() to it }
+        }.toMap()
+        // Read exactly, as the web reads scrollTop: Compose offers a scroll action on the list only while it can
+        // scroll that way (a lazy list's own canScrollForward / canScrollBackward) — a section header cut off above
+        // row 0 included. No scrolling ancestor: nothing scrolls the rows.
+        val (canScrollUp, canScrollDown) = listNode?.let { MoveItemNodes.canScroll(it) } ?: (false to false)
+        val handle = step.handle?.let { grip ->
+            MoveItemPlan.Handle.Given(fromNode?.let { MoveItemNodes.handle(it, grip) }?.div(density))
+        } ?: MoveItemPlan.Handle.None
+
+        when (val plan = MoveItemPlan.plan(id, from, to, section, screen, list, rows, handle, canScrollUp, canScrollDown)) {
             is MoveItemPlan.Outcome.Fail -> throw fail(plan.reason)
             is MoveItemPlan.Outcome.Gesture -> {
+                val witness = MoveItemPlan.witness(from, to, found, visible)
+                val before = witness?.let { found[it] }
+                fun px(p: MoveItemPlan.Point) = MoveItemPlan.Point(p.x * density, p.y * density)
                 // Slow: 250 dp a second.
-                val path = MoveItemPlan.path(plan.press, plan.release, speedPxPerS = 250.0 * density)
-                injectDrag(plan.press, path)
+                val path = MoveItemPlan.path(plan.press, plan.release, speedPerS = 250.0).map(::px)
+                injectDrag(px(plan.press), path)
                 device.waitForIdle(1000)
+                if (witness != null && before != null) {
+                    NodeCache.clear()
+                    val after = MoveItemNodes.items(prefix, step.within)[witness].orEmpty().singleOrNull()
+                        ?.let { MoveItemNodes.box(it, density) }
+                    if (after == null || MoveItemPlan.scrolled(before, after)) {
+                        throw AssertionError(MoveItemPlan.scrolledSentence("$prefix$witness", before, after))
+                    }
+                }
             }
         }
     }

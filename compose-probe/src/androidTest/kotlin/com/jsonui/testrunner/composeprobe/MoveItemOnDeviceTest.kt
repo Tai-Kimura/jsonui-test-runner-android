@@ -44,19 +44,20 @@ class MoveItemOnDeviceTest {
         MoveItemNodes.rows(listOf("stops_item_0"), null)["stops_item_0"]?.singleOrNull()?.let {
             Log.i("MoveItemOnDevice", "$mode grip in row 0: ${MoveItemNodes.handle(it, "grip")}")
             Log.i("MoveItemOnDevice", "$mode the list that scrolls row 0: ${MoveItemNodes.scrollContainer(it)}")
+            Log.i("MoveItemOnDevice", "$mode canScroll (up, down) from the list's actions: ${MoveItemNodes.scrollNode(it)?.let { l -> MoveItemNodes.canScroll(l) }}")
         }
     }
 
     private fun move(from: Int, to: Int, handle: String? = null) =
         actions.execute(TestStep(action = "moveItem", id = "stops", from = from, to = to, handle = handle))
 
-    private fun order(vararg moved: Pair<Int, Int>): List<String> {
-        val list = ReorderProbeActivity.INITIAL.toMutableList()
+    private fun order(vararg moved: Pair<Int, Int>, start: List<String> = ReorderProbeActivity.INITIAL): List<String> {
+        val list = start.toMutableList()
         moved.forEach { (f, t) -> list.add(t, list.removeAt(f)) }
         return list
     }
 
-    private fun refused(from: Int, to: Int, handle: String? = null, says: String) {
+    private fun refused(from: Int, to: Int, handle: String? = null, says: String, initial: List<String> = ReorderProbeActivity.INITIAL) {
         try {
             move(from, to, handle)
             fail("moveItem $from -> $to was not refused")
@@ -65,7 +66,7 @@ class MoveItemOnDeviceTest {
         }
         device.waitForIdle(500)
         assertEquals(emptyList<Triple<Int, Int, Int>>(), ReorderProbeActivity.moves)
-        assertEquals(ReorderProbeActivity.INITIAL, ReorderProbeActivity.rows.toList())
+        assertEquals(initial, ReorderProbeActivity.rows.toList())
     }
 
     @Test
@@ -131,22 +132,50 @@ class MoveItemOnDeviceTest {
         // A lazy row out of view is not composed, so not in the tree: it is named as not found.
         refused(1, 19, says = "moveItem: 'stops_item_19' was not found")
         refused(1, 2, handle = "grip", says = "moveItem: the handle 'grip' was not found inside the row (from 1)")
-        // Row 0 sits 40 dp from the window's top: within 100 dp of it.
-        refused(0, 2, says = "moveItem: 'stops_item_0' is too near the screen's top or bottom (within 100: a list scrolls by itself there under a held finger); scroll it towards the middle first")
     }
 
     @Test
-    fun aRowHalfUnderItsListsEdgeIsNotOnScreenARowAtItsTopIsTooNearAMoveInsideLands() {
+    fun aRowHalfUnderItsListsEdgeIsNotOnScreenAMoveInsideLands() {
         launch("short")
         // Row 4 is drawn 42 of its 64 dp; its bounds are the whole row (Compose clips them to the window only),
         // past the list's bottom.
         refused(1, 4, says = "moveItem: 'stops_item_4' is not on screen (scroll it into view first, e.g. scrollUntilVisible; the drag does not scroll)")
-        // Row 0's centre is 32 dp below the list's top, inside KotlinJsonUI's 48 dp band, though far from the screen's.
-        refused(0, 2, says = "moveItem: 'stops_item_0' is too near the screen's top or bottom (within 100: a list scrolls by itself there under a held finger); scroll it towards the middle first")
         move(1, 2)
         device.waitForIdle(1000)
         assertEquals(listOf(Triple(0, 1, 2)), ReorderProbeActivity.moves)
         assertEquals(order(1 to 2), ReorderProbeActivity.rows.toList())
+    }
+
+    @Test
+    fun theFirstRowAtTheTopOfAListAtItsTopMoves() {
+        // Row 0's centre is 32 dp below the list's top, inside KotlinJsonUI's 48 dp band — but the list is at its
+        // top, so nothing scrolls there (canScrollUp false).
+        launch("short")
+        move(0, 2)
+        device.waitForIdle(1000)
+        assertEquals(listOf(Triple(0, 0, 2)), ReorderProbeActivity.moves)
+        assertEquals(order(0 to 2), ReorderProbeActivity.rows.toList())
+    }
+
+    @Test
+    fun theLastRowAtTheBottomOfAListAtItsEndMovesBothWays() {
+        // Six rows in a list exactly their height: it cannot scroll either way, so a release 16 dp above its bottom
+        // is clear (canScrollDown false).
+        launch("few")
+        val six = ReorderProbeActivity.INITIAL.take(6)
+        move(3, 5)
+        move(5, 0)
+        device.waitForIdle(1000)
+        assertEquals(listOf(Triple(0, 3, 5), Triple(0, 5, 0)), ReorderProbeActivity.moves)
+        assertEquals(order(3 to 5, 5 to 0, start = six), ReorderProbeActivity.rows.toList())
+    }
+
+    @Test
+    fun aHeaderCutAtTheListsTopIsSeenTheMoveIsRefusedBeforeAnythingMoves() {
+        // Row 0 is whole and the header above it is cut: the list can still scroll up. Read from the list's scroll
+        // actions, the driver sees it, and a release 26 dp below the list's top (inside the 48 dp band) is refused.
+        launch("header")
+        refused(2, 0, says = "moveItem: 'stops_item_0' is too near the top or bottom of the screen (100) or of its list (56): the list scrolls by itself there under a held finger; scroll it towards the middle first")
     }
 
     @Test
@@ -156,6 +185,6 @@ class MoveItemOnDeviceTest {
         val rows = MoveItemNodes.boxes(MoveItemNodes.rows((0..19).map { "stops_item_$it" }, null))
         val bottom = device.displayHeight.toDouble()
         val last = (0..19).last { n -> rows["stops_item_$n"].orEmpty().singleOrNull()?.let { it.bottom <= bottom && it.height > 100 } == true }
-        refused(2, last, says = "moveItem: 'stops_item_$last' is too near the screen's top or bottom (within 100: a list scrolls by itself there under a held finger); scroll it towards the middle first")
+        refused(2, last, says = "moveItem: 'stops_item_$last' is too near the top or bottom of the screen (100) or of its list (56): the list scrolls by itself there under a held finger; scroll it towards the middle first")
     }
 }

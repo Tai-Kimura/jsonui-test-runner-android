@@ -35,6 +35,26 @@ object MoveItemNodes {
         found
     }.getOrDefault(addresses.associateWith { emptyList() })
 
+    /** Every node whose tag is `[prefix]<n>` (a Collection's rows), by n, inside [within] when given. */
+    fun items(prefix: String, within: String?): Map<Int, List<AccessibilityNodeInfo>> = runCatching {
+        val found = sortedMapOf<Int, MutableList<AccessibilityNodeInfo>>()
+        val start = root() ?: return@runCatching found
+        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Boolean>>()
+        queue.add(start to (within == null))
+        while (queue.isNotEmpty()) {
+            val (node, inside) = queue.removeFirst()
+            val tag = node.viewIdResourceName
+            if (inside && tag != null && tag.startsWith(prefix)) {
+                tag.removePrefix(prefix).toIntOrNull()?.let { found.getOrPut(it) { mutableListOf() }.add(node) }
+            }
+            val childrenInside = inside || tag == within
+            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it to childrenInside) }
+        }
+        found as Map<Int, List<AccessibilityNodeInfo>>
+    }.getOrDefault(emptyMap())
+
+    fun box(node: AccessibilityNodeInfo, density: Double): MoveItemPlan.Box = box(node).div(density)
+
     fun boxes(nodes: Map<String, List<AccessibilityNodeInfo>>): Map<String, List<MoveItemPlan.Box>> =
         nodes.mapValues { (_, list) -> list.map(::box) }
 
@@ -52,6 +72,28 @@ object MoveItemNodes {
         }
         null
     }.getOrNull()
+
+    /** The nearest scrolling ancestor of [row], or null. */
+    fun scrollNode(row: AccessibilityNodeInfo): AccessibilityNodeInfo? = runCatching {
+        var node: AccessibilityNodeInfo? = row.parent
+        while (node != null) {
+            if (node.isScrollable) return@runCatching node
+            node = node.parent
+        }
+        null
+    }.getOrNull()
+
+    /**
+     * Whether [list] can still scroll up / down, read exactly: Compose offers a scroll action on a scrollable node
+     * only while it can scroll that way (a lazy list's from its own canScrollForward / canScrollBackward).
+     */
+    fun canScroll(list: AccessibilityNodeInfo): Pair<Boolean, Boolean> = runCatching {
+        list.refresh()
+        val ids = list.actionList.map { it.id }.toSet()
+        val up = android.R.id.accessibilityActionScrollUp in ids || AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD in ids
+        val down = android.R.id.accessibilityActionScrollDown in ids || AccessibilityNodeInfo.ACTION_SCROLL_FORWARD in ids
+        up to down
+    }.getOrDefault(true to true)
 
     /** The node tagged [handle] inside [row] (the row itself excluded), or null. */
     fun handle(row: AccessibilityNodeInfo, handle: String): MoveItemPlan.Box? = runCatching {

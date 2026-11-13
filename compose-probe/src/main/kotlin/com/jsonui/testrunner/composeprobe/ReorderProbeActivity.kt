@@ -44,7 +44,9 @@ import com.jsonui.testrunner.composeprobe.reorder.rememberCollectionReorder
  * reorderHandle id `grip` in every row — for MoveItemOnDeviceTest. Two modes (intent extra `mode`):
  *  - "list": a LazyColumn that scrolls itself, the whole row pressed (Collection's list route);
  *  - "handle": rows in a Column an outer scroll carries (lazy: none), pressed on the grip, row 3 locked;
- *  - "short": the list of "list" 330 dp tall in the screen's middle, a text below it: row 4 is half under its edge.
+ *  - "short": the list of "list" 330 dp tall in the screen's middle, a text below it: row 4 is half under its edge;
+ *  - "few": six rows in a list exactly their height in the screen's middle — the list cannot scroll either way;
+ *  - "header": the list of "list" under a 300 dp header scrolled up to its last 10 dp: row 0 whole, the header cut.
  * [rows] is the order the "view model" holds, moved on onReorder; [moves] the onReorder calls, read in-process.
  */
 class ReorderProbeActivity : ComponentActivity() {
@@ -54,10 +56,15 @@ class ReorderProbeActivity : ComponentActivity() {
         val rows = mutableStateListOf<String>()
         val moves = mutableListOf<Triple<Int, Int, Int>>()
         @Volatile var resumed = false
+        /** The lazy list's first visible item index, read in-process (null in the handle mode). */
+        @Volatile var firstVisible: Int? = null
+        /** The lazy list's place before a move, put back after it (see onCreate). */
+        @Volatile var lazyState: androidx.compose.foundation.lazy.LazyListState? = null
+        val restore = androidx.compose.runtime.mutableStateOf<Pair<Int, Int>?>(null)
 
         fun reset() {
             resumed = false
-            rows.clear(); rows.addAll(INITIAL); moves.clear()
+            rows.clear(); rows.addAll(INITIAL); moves.clear(); lazyState = null; restore.value = null
         }
     }
 
@@ -66,10 +73,15 @@ class ReorderProbeActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val mode = intent.getStringExtra("mode")
         val handle = mode == "handle"
+        // This build's Compose (1.6.8) keeps a lazy list's first visible item in place BY KEY: moved, the list
+        // scrolls after it. KotlinJsonUI's Compose (BOM 2026.09.00) holds the list's place instead (KotlinJsonUI's
+        // CollectionReorderScrollAnchorTest pins it), so the probe puts the place back, as the library's rows behave.
         val reorder = CollectionReorder(isEnabled = true, usesHandle = handle) { section, from, to ->
+            lazyState?.let { restore.value = it.firstVisibleItemIndex to it.firstVisibleItemScrollOffset }
             moves.add(Triple(section, from, to))
             rows.add(to, rows.removeAt(from))
         }
+        if (mode == "few") { rows.clear(); rows.addAll(INITIAL.take(6)) }
         setContent {
             val row = @androidx.compose.runtime.Composable { i: Int ->
                 Row(
@@ -94,16 +106,34 @@ class ReorderProbeActivity : ComponentActivity() {
                 } else {
                     val state = rememberCollectionReorder(reorder, scrollsItself = true)
                     CollectionReorderScope(state) {
+                        val density = androidx.compose.ui.platform.LocalDensity.current
+                        val listState = androidx.compose.foundation.lazy.rememberLazyListState(
+                            0, if (mode == "header") with(density) { 290.dp.roundToPx() } else 0
+                        )
+                        androidx.compose.runtime.SideEffect { firstVisible = listState.firstVisibleItemIndex; lazyState = listState }
+                        androidx.compose.runtime.LaunchedEffect(restore.value) {
+                            restore.value?.let { (i, o) -> listState.scrollToItem(i, o); restore.value = null }
+                        }
+                        androidx.compose.runtime.LaunchedEffect(listState) {
+                            androidx.compose.runtime.snapshotFlow { listState.firstVisibleItemIndex }.collect { firstVisible = it }
+                        }
                         Column(Modifier.fillMaxSize()) {
-                            if (mode == "short") Spacer(Modifier.height(240.dp))
+                            if (mode == "short" || mode == "few") Spacer(Modifier.height(240.dp))
                             LazyColumn(
-                                (if (mode == "short") Modifier.fillMaxWidth().height(330.dp) else Modifier.fillMaxSize().padding(top = 40.dp))
-                                    .testTag("stops").collectionReorderContainer(state),
+                                when (mode) {
+                                    "short" -> Modifier.fillMaxWidth().height(330.dp)
+                                    "few" -> Modifier.fillMaxWidth().height(424.dp) // 6 rows of 64 dp, 8 dp apart
+                                    else -> Modifier.fillMaxSize().padding(top = 40.dp)
+                                }.testTag("stops").collectionReorderContainer(state),
+                                state = listState,
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
+                                if (mode == "header") item(key = "header") {
+                                    Box(Modifier.fillMaxWidth().height(292.dp).background(Color(0xFFE3F2FD)).testTag("stops_header"))
+                                }
                                 collectionReorderRows(state, 0, rows.toList()) { i -> row(i) }
                             }
-                            if (mode == "short") Text("below the list", Modifier.padding(16.dp))
+                            if (mode == "short" || mode == "few") Text("below the list", Modifier.padding(16.dp))
                         }
                     }
                 }
