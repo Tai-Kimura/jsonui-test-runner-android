@@ -163,6 +163,12 @@ data class FlowTestStep(
     val step: Double? = null,
     /** The value assertion: the largest accepted difference (default 1e-6 here) */
     val tolerance: Double? = null,
+    /** moveItem: the row picked up and its index after the move (0-based, within section 0) */
+    val from: Int? = null,
+    val to: Int? = null,
+    val section: Int? = null,
+    /** moveItem: the Collection's reorderHandle id, pressed inside the from row */
+    val handle: String? = null,
     val times: Int? = null,
     /** Target orientation for the setOrientation action ("portrait" | "landscape") */
     val orientation: String? = null,
@@ -249,6 +255,12 @@ data class TestStep(
     val step: Double? = null,
     /** The value assertion: the largest accepted difference (default 1e-6 here) */
     val tolerance: Double? = null,
+    /** moveItem: the row picked up and its index after the move (0-based, within section 0) */
+    val from: Int? = null,
+    val to: Int? = null,
+    val section: Int? = null,
+    /** moveItem: the Collection's reorderHandle id, pressed inside the from row */
+    val handle: String? = null,
     val times: Int? = null,
     /** Target orientation for the setOrientation action ("portrait" | "landscape") */
     val orientation: String? = null,

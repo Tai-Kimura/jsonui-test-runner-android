@@ -25,6 +25,7 @@ import com.jsonui.testrunner.runner.ScrollHistory
 import com.jsonui.testrunner.runner.StableScreenshot
 import com.jsonui.testrunner.runner.NodeCache
 import com.jsonui.testrunner.runner.SliderNodes
+import com.jsonui.testrunner.runner.MoveItemNodes
 import com.jsonui.testrunner.runner.ProjectionProbe
 import java.io.File
 
@@ -151,6 +152,7 @@ class ActionExecutor(
             "alertTap" -> executeAlertTap(step, timeout)
             "selectOption" -> executeSelectOption(step, timeout)
             "tapItem" -> executeTapItem(step, timeout)
+            "moveItem" -> executeMoveItem(step, timeout)
             "selectTab" -> executeSelectTab(step, timeout)
             "readText" -> executeReadText(step, timeout)
             "setSliderValue" -> executeSetSliderValue(step, timeout)
@@ -516,6 +518,91 @@ class ActionExecutor(
         val itemId = "${id}_item_${index}"
         val element = waitForElement(itemId, timeout, step.within)
         element.click()
+    }
+
+    /**
+     * moveItem (schemas moveItemAction): a reorderable Collection's row pressed 1.0 s (on its handle when the step
+     * gives one), dragged slowly, held 0.5 s and released over the to row (MoveItemPlan, by the shared vectors
+     * specs/vectors/move-item.json). Nothing moves when the plan fails; the failure names the row.
+     *
+     * The finger is injected as touch events through UiAutomation: uiautomator's own drag presses for a fixed
+     * moment and lets go as soon as it arrives, where the libraries' drag needs a long press first and a release
+     * that has stood still over the row. The edge margin is 100 dp on the device (MoveItemPlan.edgeMarginPx).
+     */
+    private fun executeMoveItem(step: TestStep, timeout: Long) {
+        val id = step.id ?: throw IllegalArgumentException("moveItem requires 'id'")
+        val from = step.from ?: throw IllegalArgumentException("moveItem requires 'from'")
+        val to = step.to ?: throw IllegalArgumentException("moveItem requires 'to'")
+        val section = step.section ?: 0
+        val fail = { reason: String -> AssertionError(MoveItemPlan.sentence(reason, from, step.handle)) }
+        MoveItemPlan.early(from, to, section)?.let { throw fail(it) }
+
+        val addresses = listOf("${id}_item_$from", "${id}_item_$to")
+        // Both rows are waited for within the step's timeout; one still absent is named by the plan.
+        val deadline = Deadline.of(timeout)
+        val nodes = deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
+            MoveItemNodes.rows(addresses, step.within).takeIf { found -> addresses.all { found[it].orEmpty().isNotEmpty() } }
+        } ?: MoveItemNodes.rows(addresses, step.within)
+        val handle = step.handle?.let { grip ->
+            MoveItemPlan.Handle.Given(nodes[addresses[0]].orEmpty().singleOrNull()?.let { MoveItemNodes.handle(it, grip) })
+        } ?: MoveItemPlan.Handle.None
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val window = AppWindow.rootBounds(instrumentation) ?: Rect(0, 0, device.displayWidth, device.displayHeight)
+        val screen = MoveItemPlan.Box(
+            window.left.toDouble(), window.top.toDouble(), window.width().toDouble(), window.height().toDouble()
+        )
+        // The list that scrolls the rows: Compose clips a row's bounds to the window only, so a row the list draws
+        // half under its own edge is told by the list's bounds (MoveItemPlan.planOnDevice).
+        val list = nodes[addresses[0]].orEmpty().singleOrNull()?.let { MoveItemNodes.scrollContainer(it) }
+        val density = android.content.res.Resources.getSystem().displayMetrics.density
+        when (val plan = MoveItemPlan.planOnDevice(
+            id, from, to, section, screen, list, MoveItemNodes.boxes(nodes), handle,
+            screenMargin = MoveItemPlan.edgeMarginPx(density), listMargin = MoveItemPlan.LIST_MARGIN_DP * density
+        )) {
+            is MoveItemPlan.Outcome.Fail -> throw fail(plan.reason)
+            is MoveItemPlan.Outcome.Gesture -> {
+                // Slow: 250 dp a second.
+                val path = MoveItemPlan.path(plan.press, plan.release, speedPxPerS = 250.0 * density)
+                injectDrag(plan.press, path)
+                device.waitForIdle(1000)
+            }
+        }
+    }
+
+    /** Down at [press], held [MoveItemPlan.PRESS_MS], moved along [path] a frame at a time, held [MoveItemPlan.HOLD_MS], up. */
+    private fun injectDrag(press: MoveItemPlan.Point, path: List<MoveItemPlan.Point>) {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val downTime = SystemClock.uptimeMillis()
+        fun send(action: Int, p: MoveItemPlan.Point) {
+            val event = android.view.MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, p.x.toFloat(), p.y.toFloat(), 0)
+            event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+            try {
+                if (!automation.injectInputEvent(event, true)) throw AssertionError("moveItem: the touch could not be injected")
+            } finally {
+                event.recycle()
+            }
+        }
+        send(android.view.MotionEvent.ACTION_DOWN, press)
+        var last = press
+        try {
+            // The finger stands still: the same point again each frame, as a held finger reports.
+            fun hold(ms: Long) {
+                val until = SystemClock.uptimeMillis() + ms
+                while (SystemClock.uptimeMillis() < until) {
+                    SystemClock.sleep(16)
+                    send(android.view.MotionEvent.ACTION_MOVE, last)
+                }
+            }
+            hold(MoveItemPlan.PRESS_MS)
+            for (p in path) {
+                SystemClock.sleep(16)
+                send(android.view.MotionEvent.ACTION_MOVE, p)
+                last = p
+            }
+            hold(MoveItemPlan.HOLD_MS)
+        } finally {
+            send(android.view.MotionEvent.ACTION_UP, last)
+        }
     }
 
     private fun executeSelectTab(step: TestStep, timeout: Long) {

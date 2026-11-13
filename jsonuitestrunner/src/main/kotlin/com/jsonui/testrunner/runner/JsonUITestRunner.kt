@@ -1404,6 +1404,10 @@ class JsonUITestRunner(
         range = range,
         step = step,
         tolerance = tolerance,
+        from = from,
+        to = to,
+        section = section,
+        handle = handle,
         within = within,
         container = container,
         variable = variable,
@@ -1796,6 +1800,7 @@ class JsonUITestRunner(
             path = substituteArgsInString(step.path, args),
             container = substituteArgsInString(step.container, args),
             within = substituteArgsInString(step.within, args),
+            handle = substituteArgsInString(step.handle, args),
             cropId = substituteArgsInString(step.cropId, args),
             equals = substituteArgsInJsonElement(step.equals, args)
         )

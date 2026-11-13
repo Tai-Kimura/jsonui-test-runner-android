@@ -260,6 +260,7 @@ class TestLoader {
             // `within` names a cell, and the cell's index is what a case
             // parameterises: "within": "list_item_@{row}".
             within = substituteArgsInString(step.within, args),
+            handle = substituteArgsInString(step.handle, args),
             equals = substituteArgsInJsonElement(step.equals, args)
         )
     }

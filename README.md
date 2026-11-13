@@ -146,6 +146,7 @@ Test files use JSON format with `.test.json` extension.
 | back | - | - | Navigate back |
 | screenshot | name | - | Take screenshot |
 | setSliderValue | id, value | range, step, within, timeout | Put a Slider at a value in its own units (1.22.0+, see below) |
+| moveItem | id, from, to | handle, section, within, timeout | Long-press a reorderable Collection's row and drag it to `to` (1.23.0+, see below) |
 
 **Direction values:** `up`, `down`, `left`, `right`
 
@@ -188,6 +189,38 @@ step it landed on.
 (within `tolerance`, default 1e-6), and `readText` reads it as text ("9",
 "-2.5"). To check what the app keeps or sends, assert `state` on the bound
 data.
+
+## Reordering rows: `moveItem` (1.23.0+)
+
+```json
+{ "action": "moveItem", "id": "stops", "from": 0, "to": 2 }
+{ "action": "moveItem", "id": "stops", "from": 3, "to": 0, "handle": "grip" }
+```
+
+Moves a reorderable Collection's row as a finger does. The row
+`<id>_item_<from>` (with `handle`, the element of that id inside it) is pressed
+1.0 s, dragged slowly, held 0.5 s over `<id>_item_<to>` and released at 3/4 of
+that row's height going down, 1/4 going up — never on a centre. `to` is the
+row's index after the move (onReorder's `to`). The touches are injected
+through UiAutomation, so the long press, the slow drag and the hold are real.
+
+Nothing moves, and the step fails naming the row, when: `from` equals `to`;
+`section` is not 0 (v1 moves within one section); the row's address is more
+than one element (a Collection of several sections); a row is not found (a
+lazy row out of view is not composed, so it is "not found" here); a row is not
+wholly inside the screen and inside the list that scrolls it; the press or the
+release is within 100 dp of the screen's top or bottom, or within 56 dp of the
+list's (KotlinJsonUI's own auto-scroll band is 48 dp from the edges of a list
+that scrolls itself: a finger held there scrolls the list and the row lands
+further); or `handle` is given and not found inside the row. Scroll the rows
+towards the middle first; the drag does not scroll.
+
+The step only moves the row: assert its result with the steps that follow (the
+rows' text, or `state`). Where the press and the release are, and the failures
+and their order, are jsonui-test-runner's `specs/vectors/move-item.json`
+(a byte copy in `src/test/resources/vectors`, run by `MoveItemPlanVectorsTest`);
+the on-device arm is compose-probe's `MoveItemOnDeviceTest`, on rows drawn by
+KotlinJsonUI's own drag.
 
 ## `within`: an id inside one element
 
