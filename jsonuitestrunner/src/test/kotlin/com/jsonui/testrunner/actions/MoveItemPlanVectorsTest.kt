@@ -113,6 +113,14 @@ class MoveItemPlanVectorsTest {
     }
 
     @Test
+    fun `verify compares y only, so a scroll is never said as moved by 0`() {
+        val before = Box(0.0, 400.0, 400.0, 44.0)
+        assertTrue(!MoveItemPlan.scrolled(before, Box(3.0, 400.2, 397.0, 44.0)))
+        assertTrue(MoveItemPlan.scrolled(before, Box(0.0, 401.6, 400.0, 44.0)))
+        assertTrue(MoveItemPlan.scrolledSentence("list_item_7", before, Box(0.0, 401.6, 400.0, 44.0)).contains("moved by 2"))
+    }
+
+    @Test
     fun `the same row and a section other than 0 fail before anything is looked for`() {
         assertEquals("same", MoveItemPlan.early(2, 2, 0))
         assertEquals("same", MoveItemPlan.early(2, 2, 1))

@@ -1,10 +1,10 @@
-// A copy of KotlinJsonUI library/src/main/kotlin/com/kotlinjsonui/components/CollectionReorder.kt at d21e79f (branch
+// A copy of KotlinJsonUI library/src/main/kotlin/com/kotlinjsonui/components/CollectionReorder.kt at ae5fb38 (branch
 // feat/collection-reorder), the package changed: the rows moveItem's on-device arm drags are the library's own.
 // compose-probe cannot depend on KotlinJsonUI (its Kotlin and Compose are newer than this build's).
 // One change besides the package: NestedScrollSource.UserInput (Compose 1.7) is Drag, its name in this build's 1.6.
 package com.jsonui.testrunner.composeprobe.reorder
 
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.lazy.LazyItemScope
@@ -89,6 +89,15 @@ class CollectionReorderDrag internal constructor() {
     internal var autoScrollVelocity = 0f  // px a second
     internal var locked: Set<Int> = emptySet()
     internal var count = 0
+    /**
+     * True from a committed move until the next drag begins. The data has moved, so each row is laid out where it
+     * was drawn: the rows the drag shifted take their place at once. Animated back instead, a row that had made room
+     * changed its index while it was still drawn a row away, and was drawn there — one row up or down — before it
+     * slid back; the screen's accessibility bounds kept that drawn place (they follow layout and semantics, not a
+     * redraw), and a finger aimed there landed one row further (measured: 5 of 12 moves made right after a move).
+     */
+    var committed by mutableStateOf(false)
+        internal set
 
     internal fun rows(): List<CollectionReorderRules.RowSpan> =
         (0 until count).map { spans[it] ?: CollectionReorderRules.RowSpan(0f, 0f) }
@@ -243,7 +252,10 @@ private fun ReorderRow(
     drag.locked = locked
     val reorder = state.reorder ?: return content()
     val isDragged = drag.dragging == index
-    val shift by animateFloatAsState(if (isDragged) 0f else drag.shiftOf(index), label = "reorder-shift")
+    // A cancelled drag slides the rows it shifted back; a committed one leaves them where the data put them.
+    val target = if (isDragged) 0f else drag.shiftOf(index)
+    val shift = remember { Animatable(0f) }
+    LaunchedEffect(target, drag.committed) { if (drag.committed) shift.snapTo(0f) else shift.animateTo(target) }
     val ctx = remember(state, section, index) { RowContext(state, section, index) }
     val rowGesture = if (!reorder.usesHandle && index !in locked) Modifier.reorderGesture(ctx) else Modifier
     // The auto-scroll goes from the dragged row up to whatever scrolls it (nested scroll), and a lazy list keeps the
@@ -267,7 +279,11 @@ private fun ReorderRow(
             .zIndex(if (isDragged) 1f else 0f)
             .graphicsLayer {
                 // The dragged row follows the finger: its layout moved with the scroll, so it is drawn dy from there.
-                translationY = if (isDragged) drag.dy else shift
+                translationY = when {
+                    isDragged -> drag.dy
+                    drag.committed -> 0f
+                    else -> shift.value
+                }
                 if (isDragged) { scaleX = 1.02f; scaleY = 1.02f; shadowElevation = 8f * state.density }
             }
             .then(rowGesture),
@@ -322,6 +338,7 @@ private fun Modifier.reorderGesture(ctx: RowContext): Modifier = composed {
         detectDragGesturesAfterLongPress(
             onDragStart = { offset ->
                 if (ctx.index in drag.locked) return@detectDragGesturesAfterLongPress
+                drag.committed = false
                 drag.scrolled = 0f
                 drag.fingerDy = 0f
                 drag.dy = 0f
@@ -360,7 +377,10 @@ private fun finish(state: CollectionReorderState, drag: CollectionReorderDrag, s
         drag.spans.replaceAll { _, s -> CollectionReorderRules.RowSpan(s.top - back, s.bottom - back) }
     }
     drag.scrolled = 0f
-    if (commits && CollectionReorderRules.shouldReport(from, to)) state.reorder?.onReorder?.invoke(section, from, to)
+    if (commits && CollectionReorderRules.shouldReport(from, to)) {
+        drag.committed = true
+        state.reorder?.onReorder?.invoke(section, from, to)
+    }
 }
 
 /** While a row is dragged near the container's visible edge, scroll its parent each frame (a nested scroll). */

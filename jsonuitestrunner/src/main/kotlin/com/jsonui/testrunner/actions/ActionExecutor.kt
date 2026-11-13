@@ -547,8 +547,17 @@ class ActionExecutor(
         val prefix = "${id}_item_"
         // Both rows are waited for within the step's timeout; one still absent is named by the plan.
         val deadline = Deadline.of(timeout)
+        // ... and read once their place has settled: two reads 150 ms apart agree on both rows. Read while a list
+        // was still laying out after a screen came up, a row's bounds were a row's height off (measured: a press
+        // 53 px below the row's centre on a screen read at once).
+        fun place(found: Map<Int, List<android.view.accessibility.AccessibilityNodeInfo>>) =
+            listOf(from, to).map { n -> found[n].orEmpty().map { MoveItemNodes.box(it, 1.0) } }
         val nodes = deadline.poll(beforeRetry = NodeCache.clearBeforeRetry) {
-            MoveItemNodes.items(prefix, step.within).takeIf { found -> found.containsKey(from) && found.containsKey(to) }
+            MoveItemNodes.items(prefix, step.within).takeIf { found -> found.containsKey(from) && found.containsKey(to) }?.let { first ->
+                SystemClock.sleep(150)
+                NodeCache.clear()
+                MoveItemNodes.items(prefix, step.within).takeIf { again -> place(again) == place(first) }
+            }
         } ?: MoveItemNodes.items(prefix, step.within)
 
         val density = android.content.res.Resources.getSystem().displayMetrics.density.toDouble()

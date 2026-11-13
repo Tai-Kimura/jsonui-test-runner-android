@@ -1,4 +1,4 @@
-// A copy of KotlinJsonUI library/src/main/kotlin/com/kotlinjsonui/components/CollectionReorderRules.kt at d21e79f (branch
+// A copy of KotlinJsonUI library/src/main/kotlin/com/kotlinjsonui/components/CollectionReorderRules.kt at ae5fb38 (branch
 // feat/collection-reorder), the package changed: the rows moveItem's on-device arm drags are the library's own.
 // compose-probe cannot depend on KotlinJsonUI (its Kotlin and Compose are newer than this build's).
 package com.jsonui.testrunner.composeprobe.reorder

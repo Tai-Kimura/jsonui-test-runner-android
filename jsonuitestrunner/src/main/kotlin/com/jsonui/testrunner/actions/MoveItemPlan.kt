@@ -132,11 +132,11 @@ object MoveItemPlan {
     }
 
     /**
-     * Whether the witness row moved by more than 1, or is no longer found ([after] null: a lazy list scrolled it
-     * away): the list scrolled under the finger.
+     * Whether the witness row moved up or down by more than 1, or is no longer found ([after] null: a lazy list
+     * scrolled it away): the list scrolled under the finger. Only y is compared: a list scrolls up and down, and a
+     * row's x moving (a redraw) said "moved by 0" when it was counted.
      */
-    fun scrolled(before: Box, after: Box?): Boolean =
-        after == null || kotlin.math.abs(after.y - before.y) > 1.0 || kotlin.math.abs(after.x - before.x) > 1.0
+    fun scrolled(before: Box, after: Box?): Boolean = after == null || kotlin.math.abs(after.y - before.y) > 1.0
 
     /**
      * The sentence of a scroll during the drag. [after] null: the witness row is gone from the tree after the gesture
