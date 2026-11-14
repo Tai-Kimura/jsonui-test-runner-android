@@ -10,8 +10,10 @@ package com.jsonui.testrunner.actions
  * multiplies the press and the release back), so a margin is the same distance under the finger on every platform.
  *
  * The press is the handle's centre when the step gives `handle`, else the from row's centre; the release is in the
- * press's column, over the to row at 3/4 of its height going down and 1/4 going up — never on a centre, which the
- * libraries' reorder rule (jsonui-cli shared/core/reorder_vectors.json) does not count as passed and iOS 27's own
+ * press's column, where the dragged row's centre lands over the to row at 3/4 of its height going down and 1/4 going
+ * up, plus the press's offset from the from row's centre (the rule reads the row's centre, not the finger: a row held
+ * by a handle off its centre is let go that much off). Never on an edge: the libraries' reorder rule (jsonui-cli
+ * shared/core/reorder_vectors.json) passes a row when the dragged centre goes beyond its edge, as iOS 27's own
  * reordering does.
  */
 object MoveItemPlan {
@@ -111,7 +113,9 @@ object MoveItemPlan {
             Handle.None -> Point(fromRow!!.centerX, fromRow.centerY)
             is Handle.Given -> handle.box?.let { Point(it.centerX, it.centerY) } ?: return Outcome.Fail("no-handle")
         }
-        val release = Point(press.x, toRow!!.top + toRow.height * (if (to > from) 0.75 else 0.25))
+        // where the dragged row's centre lands, moved by where the finger holds the row (0 at its centre)
+        val grip = press.y - fromRow!!.centerY
+        val release = Point(press.x, toRow!!.top + toRow.height * (if (to > from) 0.75 else 0.25) + grip)
         fun near(y: Double): Boolean {
             val up = canScrollUp && (y - viewport.top < edgeMargin || (visible != null && y - visible.top < listMargin))
             val down = canScrollDown && (viewport.bottom - y < edgeMargin || (visible != null && visible.bottom - y < listMargin))

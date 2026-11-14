@@ -190,7 +190,7 @@ step it landed on.
 "-2.5"). To check what the app keeps or sends, assert `state` on the bound
 data.
 
-## Reordering rows: `moveItem` (1.23.0+)
+## Reordering rows: `moveItem` (1.23.0+; the handle's offset 1.24.0)
 
 ```json
 { "action": "moveItem", "id": "stops", "from": 0, "to": 2 }
@@ -199,8 +199,11 @@ data.
 
 Moves a reorderable Collection's row as a finger does. The row
 `<id>_item_<from>` (with `handle`, the element of that id inside it) is pressed
-1.0 s, dragged slowly, held 0.5 s over `<id>_item_<to>` and released at 3/4 of
-that row's height going down, 1/4 going up — never on a centre. `to` is the
+1.0 s, dragged slowly, held 0.5 s over `<id>_item_<to>` and released where the
+dragged row's centre is at 3/4 of that row's height going down, 1/4 going up
+(1.24.0: the release adds the press's offset from the row's centre, so a row held
+by a handle off its centre lands where a row held at its centre does; never on an
+edge — the libraries pass a row when the dragged centre goes beyond its edge). `to` is the
 row's index after the move (onReorder's `to`). The touches are injected
 through UiAutomation, so the long press, the slow drag and the hold are real.
 

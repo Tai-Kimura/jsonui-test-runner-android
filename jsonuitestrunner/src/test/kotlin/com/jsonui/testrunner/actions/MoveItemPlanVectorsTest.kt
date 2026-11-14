@@ -35,7 +35,7 @@ class MoveItemPlanVectorsTest {
     @Test
     fun `every case plans as the vectors say`() {
         val cases = doc.getValue("cases").jsonArray.map { it.jsonObject }
-        assertEquals(25, cases.size)
+        assertEquals(27, cases.size)
         for (c in cases) {
             val name = c.getValue("name").jsonPrimitive.content
             val handle = when {
