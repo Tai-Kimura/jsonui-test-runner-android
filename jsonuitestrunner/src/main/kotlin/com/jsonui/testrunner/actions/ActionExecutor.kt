@@ -2165,6 +2165,18 @@ class ActionExecutor(
             return
         }
 
+        // Next: a descendant whose content description or text is exactly the target but is not clickable itself.
+        // A library's inner part (material3 DatePicker's month-and-year header, its year arrow) names the child and
+        // leaves the click on a parent with no name or tag; Compose nodes are android.view.View, so the TextView
+        // lookup below never sees them and the step failed with "Element has no text". Tapping the child's centre
+        // lands on that parent, as a finger does.
+        val namedChild = element.findObject(By.desc(targetText)) ?: element.findObject(By.text(targetText))
+        if (namedChild != null && namedChild != element) {
+            val centre = namedChild.visibleCenter
+            device.click(centre.x, centre.y)
+            return
+        }
+
         // Fallback: proportional position (assumes left-aligned, single-line,
         // full-width text). The text may live on a descendant TextView rather
         // than the tagged node itself — use that node's bounds when it does.
